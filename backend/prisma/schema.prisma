@@ -1,0 +1,63 @@
+// Prisma Schema - PWA de Apoio Emocional (Autenticação, Preferências e Botão de Pânico)
+// Banco de Dados: PostgreSQL
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id                String           @id @default(uuid()) @db.Uuid
+  nome              String           @db.VarChar(120)
+  email             String           @unique @db.VarChar(255)
+  senhaHash         String           @map("senha_hash")
+  dataNascimento    DateTime         @map("data_nascimento") @db.Date
+  resetToken        String?          @map("reset_token") @db.VarChar(128)
+  resetTokenExpires DateTime?        @map("reset_token_expires")
+  criadoEm          DateTime         @default(now()) @map("criado_em")
+  atualizadoEm      DateTime         @updatedAt @map("atualizado_em")
+
+  preferences       UserPreferences?
+  panicLogs         PanicLog[]
+
+  @@index([resetToken])
+  @@map("users")
+}
+
+model UserPreferences {
+  id                        String   @id @default(uuid()) @db.Uuid
+  userId                    String   @unique @map("user_id") @db.Uuid
+  generosMusicais           String[] @default([]) @map("generos_musicais")
+  artistasPreferidos        String[] @default([]) @map("artistas_preferidos")
+  modoAleatorio             Boolean  @default(false) @map("modo_aleatorio")
+  contatoEmergenciaNome     String?  @map("contato_emergencia_nome") @db.VarChar(120)
+  contatoEmergenciaTelefone String?  @map("contato_emergencia_telefone") @db.VarChar(32)
+  criadoEm                  DateTime @default(now()) @map("criado_em")
+  atualizadoEm              DateTime @updatedAt @map("atualizado_em")
+
+  user                      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("user_preferences")
+}
+
+model PanicLog {
+  id              String   @id @default(uuid()) @db.Uuid
+  userId          String   @map("user_id") @db.Uuid
+  triggeredAt     DateTime @default(now()) @map("triggered_at")
+  trackId         String?  @map("track_id") @db.VarChar(100)
+  trackTitle      String   @map("track_title") @db.VarChar(255)
+  trackArtist     String?  @map("track_artist") @db.VarChar(255)
+  trackUrl        String?  @map("track_url")
+  wasOffline      Boolean  @default(false) @map("was_offline")
+  durationSeconds Int?     @map("duration_seconds")
+  criadoEm        DateTime @default(now()) @map("criado_em")
+
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, triggeredAt(sort: Desc)])
+  @@map("panic_logs")
+}

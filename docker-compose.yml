@@ -1,0 +1,16 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: calm-pwa-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: calm_user
+      POSTGRES_PASSWORD: calm_password
+      POSTGRES_DB: calm_pwa
+    ports:
+      - "5432:5432"
+    volumes:
+      - calm_pgdata:/var/lib/postgresql/data
+
+volumes:
+  calm_pgdata:
