@@ -1,0 +1,30 @@
+# Variáveis de ambiente e segredos do Backend
+.env
+.env.*
+!.env.example
+
+# Certificados e chaves privadas
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+
+# Dependências, Build e Prisma
+node_modules/
+dist/
+build/
+.prisma/
+*.tsbuildinfo
+
+# Bancos locais, logs e mídia temporária
+prisma/*.db
+prisma/*.db-journal
+*.sqlite
+*.log
+uploads/
+tmp/
+temp/
+*.webm
+*.ogg
+*.wav

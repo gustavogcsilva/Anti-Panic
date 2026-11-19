@@ -10,6 +10,7 @@
     "typecheck:backend": "npm --prefix backend run typecheck",
     "typecheck:frontend": "npm --prefix frontend run typecheck",
     "prisma:generate": "npm --prefix backend run prisma:generate",
+    "prisma:push": "npm --prefix backend run prisma:push",
     "prisma:migrate": "npm --prefix backend run prisma:migrate"
   }
 }

@@ -1,0 +1,20 @@
+# Variáveis de ambiente do Frontend
+.env
+.env.*
+!.env.example
+
+# Certificados e chaves
+*.pem
+*.key
+
+# Dependências, Build e PWA dev-dist
+node_modules/
+dist/
+build/
+dev-dist/
+*.tsbuildinfo
+
+# Logs e arquivos temporários
+*.log
+tmp/
+temp/

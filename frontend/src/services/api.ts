@@ -2,6 +2,9 @@ import type {
   AuthResponse,
   AuthUser,
   CaptchaChallenge,
+  ChatMessage,
+  ChatMessageType,
+  ChatReportData,
   CuratedTrack,
   UserPreferences,
 } from '../types';
@@ -10,6 +13,39 @@ export const API_BASE_URL =
   import.meta.env.VITE_API_URL?.replace(/\/$/, '') || 'http://localhost:3333';
 
 export const AUTH_TOKEN_STORAGE_KEY = 'respira_auth_token';
+
+type ColdStartListener = (isColdStarting: boolean) => void;
+const coldStartListeners = new Set<ColdStartListener>();
+let activeRequestsCount = 0;
+let isCurrentlyColdStarting = false;
+
+function setColdStartingState(active: boolean) {
+  if (isCurrentlyColdStarting !== active) {
+    isCurrentlyColdStarting = active;
+    for (const listener of coldStartListeners) {
+      try {
+        listener(active);
+      } catch {
+        // Ignora
+      }
+    }
+  }
+}
+
+/**
+ * Permite que componentes assinem o estado de Cold Start do servidor (quando uma requisição leva > 2.5s)
+ */
+export function subscribeColdStart(listener: ColdStartListener): () => void {
+  coldStartListeners.add(listener);
+  listener(isCurrentlyColdStarting);
+  return () => {
+    coldStartListeners.delete(listener);
+  };
+}
+
+export function isBackendColdStarting(): boolean {
+  return isCurrentlyColdStarting;
+}
 
 export class ApiError extends Error {
   public readonly status: number;
@@ -34,27 +70,51 @@ async function request<T>(
   const { token, headers, ...rest } = options;
   const authToken = token ?? window.localStorage.getItem(AUTH_TOKEN_STORAGE_KEY);
 
-  const response = await fetch(`${API_BASE_URL}${path}`, {
-    ...rest,
-    headers: {
-      'Content-Type': 'application/json',
-      Accept: 'application/json',
-      ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
-      ...headers,
-    },
-  });
+  activeRequestsCount += 1;
+  const coldStartTimer = window.setTimeout(() => {
+    if (activeRequestsCount > 0) {
+      setColdStartingState(true);
+    }
+  }, 2500);
 
-  const data = await response.json().catch(() => null);
+  try {
+    const response = await fetch(`${API_BASE_URL}${path}`, {
+      ...rest,
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+        ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
+        ...headers,
+      },
+    });
 
-  if (!response.ok) {
+    const data = await response.json().catch(() => null);
+
+    if (!response.ok) {
+      throw new ApiError(
+        data?.message || 'Não foi possível completar a solicitação.',
+        response.status,
+        data?.errors
+      );
+    }
+
+    return data as T;
+  } catch (error) {
+    if (error instanceof ApiError) {
+      throw error;
+    }
+    // Tratamento de falha de rede/cold start sem quebrar a UX offline
     throw new ApiError(
-      data?.message || 'Não foi possível completar a solicitação.',
-      response.status,
-      data?.errors
+      'O servidor de apoio está despertando ou temporariamente indisponível. Fique tranquilo: seu refúgio offline está 100% ativo.',
+      0
     );
+  } finally {
+    window.clearTimeout(coldStartTimer);
+    activeRequestsCount = Math.max(0, activeRequestsCount - 1);
+    if (activeRequestsCount === 0) {
+      setColdStartingState(false);
+    }
   }
-
-  return data as T;
 }
 
 export const api = {
@@ -100,6 +160,8 @@ export const api = {
     request<{ preferences: UserPreferences }>('/preferences', { method: 'GET' }),
 
   savePreferences: (payload: {
+    nomeAmigo?: string;
+    temaNoturno?: boolean;
     generosMusicais: string[];
     artistasPreferidos: string[];
     modoAleatorio: boolean;
@@ -111,6 +173,64 @@ export const api = {
       body: JSON.stringify(payload),
     }),
 
+  updateFriendName: (nomeAmigo: string) =>
+    request<{ preferences: UserPreferences }>('/preferences/friend-name', {
+      method: 'PATCH',
+      body: JSON.stringify({ nomeAmigo }),
+    }),
+
+  updateTheme: (temaNoturno: boolean) =>
+    request<{ preferences: UserPreferences }>('/preferences/theme', {
+      method: 'PATCH',
+      body: JSON.stringify({ temaNoturno }),
+    }),
+
   getBotTracks: () =>
     request<{ tracks: CuratedTrack[] }>('/bot/tracks', { method: 'GET' }),
+
+  getChatHistory: (options?: { crisis?: boolean }) =>
+    request<{ friendName: string; messages: ChatMessage[] }>(
+      `/chat/history${options?.crisis ? '?crisis=true' : ''}`,
+      { method: 'GET' }
+    ),
+
+  createCrisisWelcome: () =>
+    request<{ friendName: string; message: ChatMessage }>('/chat/welcome', {
+      method: 'POST',
+    }),
+
+  sendChatMessage: (payload: {
+    tipo: ChatMessageType;
+    conteudoTexto?: string;
+    audioUrl?: string | null;
+    audioDuration?: number | null;
+    criseRelacionada?: boolean;
+  }) =>
+    request<{
+      friendName: string;
+      userMessage: ChatMessage;
+      friendMessage: ChatMessage;
+    }>('/chat/message', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+
+  syncOfflineChat: (
+    messages: Array<{
+      tipo: ChatMessageType;
+      conteudoTexto?: string;
+      audioUrl?: string | null;
+      audioDuration?: number | null;
+      criseRelacionada?: boolean;
+    }>
+  ) =>
+    request<{
+      synced: Array<{ userMessage: ChatMessage; friendMessage: ChatMessage }>;
+    }>('/chat/sync', {
+      method: 'POST',
+      body: JSON.stringify({ messages }),
+    }),
+
+  getChatReportData: () =>
+    request<{ report: ChatReportData }>('/chat/report-data', { method: 'GET' }),
 };

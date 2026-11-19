@@ -1,13 +1,15 @@
 import {
-  CloudCheck,
+  Cloud,
   CloudOff,
   LogOut,
+  MessageCircleHeart,
   RefreshCw,
   SlidersHorizontal,
   Volume2,
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { CrisisOverlay } from '../components/panic/CrisisOverlay';
+import { ThemeToggleButton } from '../components/theme/ThemeToggleButton';
 import { useAuth } from '../contexts/AuthContext';
 import { usePanicMode } from '../hooks/usePanicMode';
 import { API_BASE_URL } from '../services/api';
@@ -33,11 +35,12 @@ export function Home() {
   });
 
   const firstName = user?.nome?.split(' ')[0] ?? 'você';
+  const friendName = user?.preferences?.nomeAmigo?.trim() || 'Amigo';
 
   return (
     <div className="flex min-h-screen flex-col justify-between bg-gradient-to-b from-calm-50 via-white to-calm-100/70 px-5 py-6">
       {/* Barra superior */}
-      <header className="mx-auto flex w-full max-w-lg items-center justify-between">
+      <header className="mx-auto flex w-full max-w-lg items-center justify-between gap-2">
         <div>
           <p className="text-xs font-medium uppercase tracking-wider text-calm-700">
             Respira PWA
@@ -48,13 +51,24 @@ export function Home() {
         </div>
 
         <div className="flex items-center gap-2">
+          <ThemeToggleButton />
+
+          <Link
+            to="/chat"
+            title={`Conversar com ${friendName}`}
+            className="inline-flex items-center gap-1.5 rounded-xl bg-calm-600 px-3 py-2 text-xs font-semibold text-white shadow-sm transition hover:bg-calm-700"
+          >
+            <MessageCircleHeart className="h-4 w-4" />
+            <span>Falar com {friendName}</span>
+          </Link>
+
           <Link
             to="/preferences"
-            title="Configurar músicas e contato de emergência"
+            title="Configurar músicas, amigo e contato de emergência"
             className="inline-flex items-center gap-1.5 rounded-xl border border-calm-200 bg-white px-3 py-2 text-xs font-semibold text-calm-800 shadow-sm transition hover:bg-calm-50"
           >
             <SlidersHorizontal className="h-4 w-4" />
-            Preferências
+            <span className="hidden sm:inline">Preferências</span>
           </Link>
 
           <button
@@ -69,10 +83,11 @@ export function Home() {
       </header>
 
       {/* Botão de Pânico Central */}
-      <main className="mx-auto my-8 flex w-full max-w-lg flex-col items-center text-center">
+      <main className="mx-auto my-6 flex w-full max-w-lg flex-col items-center text-center">
         <p className="mb-8 max-w-xs text-sm leading-relaxed text-slate-600">
           Sentindo a ansiedade subir? Toque no botão abaixo para ativar música acolhedora,
-          vibração calma e respiração guiada imediatamente.
+          vibração calma, respiração guiada e conversa imediata com{' '}
+          <strong className="text-calm-800">{friendName}</strong>.
         </p>
 
         <div className="relative flex items-center justify-center">
@@ -90,11 +105,36 @@ export function Home() {
           </button>
         </div>
 
+        {/* Card de Acesso Rápido ao Companheiro de Conversa */}
+        <div className="mt-10 w-full max-w-md">
+          <Link
+            to="/chat"
+            className="flex items-center justify-between gap-3 rounded-2xl border border-calm-200 bg-white/95 p-4 text-left shadow-sm transition hover:border-calm-400 hover:shadow-md"
+          >
+            <div className="flex items-center gap-3">
+              <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-calm-100 text-calm-700">
+                <MessageCircleHeart className="h-6 w-6" />
+              </div>
+              <div>
+                <p className="text-sm font-bold text-slate-800">
+                  Conversar com {friendName}
+                </p>
+                <p className="text-xs text-slate-500">
+                  Desabafe por texto ou áudio (estilo WhatsApp) e gere seu relatório em PDF
+                </p>
+              </div>
+            </div>
+            <span className="shrink-0 rounded-xl bg-calm-50 px-3 py-1.5 text-xs font-semibold text-calm-700">
+              Abrir chat
+            </span>
+          </Link>
+        </div>
+
         {/* Status do Cache Offline */}
-        <div className="mt-10 flex flex-col items-center gap-2">
+        <div className="mt-5 flex flex-col items-center gap-2">
           <div className="inline-flex items-center gap-2 rounded-full border border-calm-200 bg-white/90 px-4 py-2 text-xs font-medium text-slate-600 shadow-sm">
             {isOnline ? (
-              <CloudCheck className="h-4 w-4 text-emerald-600" />
+              <Cloud className="h-4 w-4 text-emerald-600" />
             ) : (
               <CloudOff className="h-4 w-4 text-amber-600" />
             )}
@@ -133,6 +173,7 @@ export function Home() {
         <CrisisOverlay
           currentTrack={currentTrack}
           audioError={audioError}
+          friendName={friendName}
           emergencyContactName={user?.preferences?.contatoEmergenciaNome}
           emergencyContactPhone={user?.preferences?.contatoEmergenciaTelefone}
           onSwitchTrack={switchTrack}

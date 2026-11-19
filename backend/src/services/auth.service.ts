@@ -33,6 +33,8 @@ export interface SerializedUser {
   dataNascimento: string;
   hasPreferences: boolean;
   preferences: {
+    nomeAmigo: string;
+    temaNoturno: boolean;
     generosMusicais: string[];
     artistasPreferidos: string[];
     modoAleatorio: boolean;
@@ -71,6 +73,8 @@ function serializeUser(user: {
     hasPreferences: hasConfiguredPreferences(user.preferences),
     preferences: user.preferences
       ? {
+          nomeAmigo: user.preferences.nomeAmigo || 'Amigo',
+          temaNoturno: Boolean(user.preferences.temaNoturno),
           generosMusicais: user.preferences.generosMusicais,
           artistasPreferidos: user.preferences.artistasPreferidos,
           modoAleatorio: user.preferences.modoAleatorio,

@@ -63,9 +63,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     window.localStorage.getItem(AUTH_TOKEN_STORAGE_KEY)
   );
   const [user, setUser] = useState<AuthUser | null>(() => readStoredUser());
-  const [isLoading, setIsLoading] = useState<boolean>(() =>
-    Boolean(window.localStorage.getItem(AUTH_TOKEN_STORAGE_KEY))
-  );
+  const [isLoading, setIsLoading] = useState<boolean>(() => {
+    const hasToken = Boolean(window.localStorage.getItem(AUTH_TOKEN_STORAGE_KEY));
+    const hasSnapshot = Boolean(readStoredUser());
+    return hasToken && !hasSnapshot;
+  });
 
   const persistSession = useCallback((nextToken: string, nextUser: AuthUser) => {
     window.localStorage.setItem(AUTH_TOKEN_STORAGE_KEY, nextToken);
@@ -91,13 +93,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       return;
     }
 
+    // Libera a tela imediatamente com o snapshot local para não bloquear em Cold Start do backend
+    const initialSnapshot = readStoredUser();
+    if (initialSnapshot) {
+      setUser(initialSnapshot);
+      setIsLoading(false);
+    }
+
     // Modo Offline-First: se o celular abrir o app sem internet, preserva a sessão
     // localmente para que o Botão de Pânico funcione sem pedir login.
     if (!navigator.onLine) {
-      const snapshot = readStoredUser();
-      if (snapshot) {
+      if (initialSnapshot) {
         setToken(storedToken);
-        setUser(snapshot);
       }
       setIsLoading(false);
       return;

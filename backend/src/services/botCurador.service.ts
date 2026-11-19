@@ -62,6 +62,64 @@ const RANDOM_CALM_MOODS: Array<'calming' | 'uplifting' | 'relaxing'> = [
   'relaxing',
 ];
 
+const FALLBACK_CURATED_TRACKS: CuratedTrack[] = [
+  {
+    id: 'local-calm-1',
+    title: 'Respiração Serena (Frequência de Calma)',
+    artist: 'Respira Studio',
+    audioUrl: '/audio/fallback-calm.mp3',
+    duration: 180,
+    coverUrl: null,
+    genre: 'ambient',
+    moodTag: 'calming',
+    licenseUrl: 'https://creativecommons.org/licenses/by/4.0/',
+  },
+  {
+    id: 'local-calm-2',
+    title: 'Brisa da Manhã Acústica',
+    artist: 'Horizonte Leve',
+    audioUrl: '/audio/fallback-calm.mp3',
+    duration: 210,
+    coverUrl: null,
+    genre: 'acoustic',
+    moodTag: 'uplifting',
+    licenseUrl: 'https://creativecommons.org/licenses/by/4.0/',
+  },
+  {
+    id: 'local-calm-3',
+    title: 'Piano para Desacelerar',
+    artist: 'Clara & Notas',
+    audioUrl: '/audio/fallback-calm.mp3',
+    duration: 195,
+    coverUrl: null,
+    genre: 'classical',
+    moodTag: 'relaxing',
+    licenseUrl: 'https://creativecommons.org/licenses/by/4.0/',
+  },
+  {
+    id: 'local-calm-4',
+    title: 'Tarde Tranquila Lo-Fi',
+    artist: 'Café & Chuva',
+    audioUrl: '/audio/fallback-calm.mp3',
+    duration: 165,
+    coverUrl: null,
+    genre: 'lofi',
+    moodTag: 'happy',
+    licenseUrl: 'https://creativecommons.org/licenses/by/4.0/',
+  },
+  {
+    id: 'local-calm-5',
+    title: 'Abraço Sonoro (Ondas Suaves)',
+    artist: 'Refúgio Interior',
+    audioUrl: '/audio/fallback-calm.mp3',
+    duration: 240,
+    coverUrl: null,
+    genre: 'ambient',
+    moodTag: 'calming',
+    licenseUrl: 'https://creativecommons.org/licenses/by/4.0/',
+  },
+];
+
 export class BotCuradorService {
   private readonly prisma: PrismaClient;
   private readonly jamendoClientId: string;
@@ -71,16 +129,22 @@ export class BotCuradorService {
     this.jamendoClientId = jamendoClientId.trim();
   }
 
+  private hasValidJamendoKey(): boolean {
+    return (
+      Boolean(this.jamendoClientId) &&
+      this.jamendoClientId !== 'seu-client-id-jamendo' &&
+      this.jamendoClientId.length >= 6
+    );
+  }
+
   /**
    * Lê as preferências musicais do usuário (gêneros, artistas ou modoAleatorio),
    * consulta a API gratuita do Jamendo e retorna 5 URLs diretas de MP3 aleatórias.
+   * Caso o JAMENDO_CLIENT_ID ainda não tenha sido configurado, retorna 5 faixas locais seguras.
    */
   public async getCuratedTracksForUser(userId: string): Promise<CuratedTrack[]> {
-    if (!this.jamendoClientId) {
-      throw new BotCuradorError(
-        'JAMENDO_CLIENT_ID não configurado no servidor.',
-        500
-      );
+    if (!this.hasValidJamendoKey()) {
+      return this.shuffleArray(FALLBACK_CURATED_TRACKS);
     }
 
     const preferences = await this.prisma.userPreferences.findUnique({
@@ -151,10 +215,7 @@ export class BotCuradorService {
     const curatedPool = Array.from(trackMap.values());
 
     if (curatedPool.length === 0) {
-      throw new BotCuradorError(
-        'Não foi possível obter músicas no Jamendo no momento.',
-        503
-      );
+      return this.shuffleArray(FALLBACK_CURATED_TRACKS);
     }
 
     return this.shuffleArray(curatedPool).slice(0, TARGET_TRACK_COUNT);

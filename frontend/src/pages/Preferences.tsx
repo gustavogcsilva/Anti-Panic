@@ -10,6 +10,7 @@ import {
 } from 'lucide-react';
 import { useEffect, useState, type FormEvent, type KeyboardEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { ThemeToggleButton } from '../components/theme/ThemeToggleButton';
 import { useAuth } from '../contexts/AuthContext';
 import { ApiError, api } from '../services/api';
 import { prefetchOfflineTracks } from '../services/audioCache';
@@ -31,6 +32,9 @@ export function Preferences() {
   const { user, token, updateLocalPreferences } = useAuth();
   const navigate = useNavigate();
 
+  const [nomeAmigo, setNomeAmigo] = useState<string>(
+    user?.preferences?.nomeAmigo ?? 'Amigo'
+  );
   const [generosMusicais, setGenerosMusicais] = useState<string[]>(
     user?.preferences?.generosMusicais ?? []
   );
@@ -58,6 +62,7 @@ export function Preferences() {
       try {
         const { preferences } = await api.getPreferences();
         if (!active) return;
+        setNomeAmigo(preferences.nomeAmigo || 'Amigo');
         setGenerosMusicais(preferences.generosMusicais ?? []);
         setArtistasPreferidos(preferences.artistasPreferidos ?? []);
         setModoAleatorio(Boolean(preferences.modoAleatorio));
@@ -136,6 +141,7 @@ export function Preferences() {
 
     try {
       const { preferences } = await api.savePreferences({
+        nomeAmigo: nomeAmigo.trim() || 'Amigo',
         generosMusicais,
         artistasPreferidos,
         modoAleatorio,
@@ -164,6 +170,9 @@ export function Preferences() {
     <div className="min-h-screen bg-gradient-to-b from-calm-50 via-white to-calm-100/50 px-4 py-8">
       <div className="mx-auto max-w-xl">
         <header className="mb-6 text-center">
+          <div className="mb-3 flex justify-end">
+            <ThemeToggleButton />
+          </div>
           <div className="mx-auto mb-3 inline-flex h-12 w-12 items-center justify-center rounded-2xl bg-calm-100 text-calm-700">
             <Music2 className="h-6 w-6" />
           </div>
@@ -178,6 +187,45 @@ export function Preferences() {
         </header>
 
         <form onSubmit={handleSubmit} className="space-y-6">
+          {/* Seção 0: Nome do Amigo(a) de Conversa */}
+          <section className="rounded-3xl border border-calm-100 bg-white p-5 shadow-sm">
+            <h2 className="text-base font-semibold text-slate-800">
+              Quem vai conversar com você nos momentos difíceis?
+            </h2>
+            <p className="mt-0.5 text-xs text-slate-500">
+              Escolha o nome do seu amigo(a) de escuta acolhedora. Você pode mudar quando quiser.
+            </p>
+
+            <div className="mt-3 flex flex-wrap gap-2">
+              {['Léo', 'Bia', 'Rafa', 'Nina', 'Dani', 'Caio'].map((suggestion) => (
+                <button
+                  key={suggestion}
+                  type="button"
+                  onClick={() => setNomeAmigo(suggestion)}
+                  className={`rounded-full px-3.5 py-1.5 text-xs font-semibold transition ${
+                    nomeAmigo === suggestion
+                      ? 'bg-calm-600 text-white shadow-sm'
+                      : 'bg-calm-50 text-calm-800 hover:bg-calm-100'
+                  }`}
+                >
+                  {suggestion}
+                </button>
+              ))}
+            </div>
+
+            <div className="mt-3 relative">
+              <UserRound className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+              <input
+                type="text"
+                maxLength={60}
+                value={nomeAmigo}
+                onChange={(e) => setNomeAmigo(e.target.value)}
+                placeholder="Digite o nome do seu amigo(a) (ex: Léo, Bia, Rafa)"
+                className="w-full rounded-2xl border border-slate-200 bg-slate-50/70 py-2.5 pl-10 pr-3 text-sm text-slate-800 outline-none focus:border-calm-500 focus:bg-white"
+              />
+            </div>
+          </section>
+
           {/* Card Destacado: Modo Aleatório */}
           <button
             type="button"

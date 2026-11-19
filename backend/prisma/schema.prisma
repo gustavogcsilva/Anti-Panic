@@ -2,7 +2,8 @@
 // Banco de Dados: PostgreSQL
 
 generator client {
-  provider = "prisma-client-js"
+  provider        = "prisma-client-js"
+  previewFeatures = ["driverAdapters"]
 }
 
 datasource db {
@@ -23,6 +24,8 @@ model User {
 
   preferences       UserPreferences?
   panicLogs         PanicLog[]
+  chatSessions      ChatSession[]
+  chatMessages      ChatMessage[]
 
   @@index([resetToken])
   @@map("users")
@@ -31,6 +34,8 @@ model User {
 model UserPreferences {
   id                        String   @id @default(uuid()) @db.Uuid
   userId                    String   @unique @map("user_id") @db.Uuid
+  nomeAmigo                 String   @default("Amigo") @map("nome_amigo") @db.VarChar(60)
+  temaNoturno               Boolean  @default(false) @map("tema_noturno")
   generosMusicais           String[] @default([]) @map("generos_musicais")
   artistasPreferidos        String[] @default([]) @map("artistas_preferidos")
   modoAleatorio             Boolean  @default(false) @map("modo_aleatorio")
@@ -42,6 +47,41 @@ model UserPreferences {
   user                      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@map("user_preferences")
+}
+
+model ChatSession {
+  id               String        @id @default(uuid()) @db.Uuid
+  userId           String        @map("user_id") @db.Uuid
+  titulo           String?       @db.VarChar(180)
+  criseRelacionada Boolean       @default(false) @map("crise_relacionada")
+  resumoGatilhos   String?       @map("resumo_gatilhos")
+  criadoEm         DateTime      @default(now()) @map("criado_em")
+  atualizadoEm     DateTime      @updatedAt @map("atualizado_em")
+
+  user             User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  messages         ChatMessage[]
+
+  @@index([userId, criadoEm(sort: Desc)])
+  @@map("chat_sessions")
+}
+
+model ChatMessage {
+  id               String       @id @default(uuid()) @db.Uuid
+  sessionId        String?      @map("session_id") @db.Uuid
+  userId           String       @map("user_id") @db.Uuid
+  remetente        String       @db.VarChar(16) // "USER" | "FRIEND"
+  tipo             String       @default("TEXT") @db.VarChar(16) // "TEXT" | "AUDIO"
+  conteudoTexto    String       @map("conteudo_texto")
+  audioUrl         String?      @map("audio_url")
+  audioDuration    Int?         @map("audio_duration")
+  criseRelacionada Boolean      @default(false) @map("crise_relacionada")
+  criadoEm         DateTime     @default(now()) @map("criado_em")
+
+  user             User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  session          ChatSession? @relation(fields: [sessionId], references: [id], onDelete: SetNull)
+
+  @@index([userId, criadoEm(sort: Asc)])
+  @@map("chat_messages")
 }
 
 model PanicLog {

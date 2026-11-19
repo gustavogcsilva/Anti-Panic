@@ -1,7 +1,10 @@
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
 import { ProtectedRoute, PublicOnlyRoute } from './components/auth/ProtectedRoute';
+import { BackendColdStartBanner } from './components/common/BackendColdStartBanner';
 import { AuthProvider } from './contexts/AuthContext';
+import { ThemeProvider } from './contexts/ThemeContext';
 import { ForgotPassword } from './pages/ForgotPassword';
+import { Chat } from './pages/Chat';
 import { Home } from './pages/Home';
 import { Login } from './pages/Login';
 import { Preferences } from './pages/Preferences';
@@ -11,7 +14,8 @@ import { ResetPassword } from './pages/ResetPassword';
 export function App() {
   return (
     <AuthProvider>
-      <BrowserRouter>
+      <ThemeProvider>
+        <BrowserRouter>
         <Routes>
           <Route
             path="/login"
@@ -54,6 +58,14 @@ export function App() {
             }
           />
           <Route
+            path="/chat"
+            element={
+              <ProtectedRoute>
+                <Chat />
+              </ProtectedRoute>
+            }
+          />
+          <Route
             path="/"
             element={
               <ProtectedRoute requirePreferences>
@@ -63,7 +75,9 @@ export function App() {
           />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
-      </BrowserRouter>
+        <BackendColdStartBanner />
+        </BrowserRouter>
+      </ThemeProvider>
     </AuthProvider>
   );
 }

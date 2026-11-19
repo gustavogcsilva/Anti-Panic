@@ -13,10 +13,12 @@ const envSchema = z.object({
     .string()
     .min(16)
     .default('dev-captcha-secret-alterar-em-producao-32-chars'),
-  FRONTEND_URL: z.string().url().default('http://localhost:5173'),
+  FRONTEND_URL: z.string().default('http://localhost:5173'),
   RESEND_API_KEY: z.string().optional().default(''),
   EMAIL_FROM: z.string().default('Respira PWA <onboarding@resend.dev>'),
   JAMENDO_CLIENT_ID: z.string().optional().default(''),
+  GEMINI_API_KEY: z.string().optional().default(''),
+  GEMINI_MODEL: z.string().default('gemini-2.5-flash'),
 });
 
 const parsed = envSchema.safeParse(process.env);
