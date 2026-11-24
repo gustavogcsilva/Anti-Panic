@@ -7,7 +7,12 @@ import { router } from './routes';
 
 const app = express();
 
-app.use(helmet());
+app.use(
+  helmet({
+    // Permite que o PWA na Vercel carregue e faça cache de áudio MP3 servido pelo proxy no Render
+    crossOriginResourcePolicy: { policy: 'cross-origin' },
+  })
+);
 
 // Lista de origens permitidas (incluindo Vercel, Netlify e localhost para camadas gratuitas)
 const configuredOrigins = env.FRONTEND_URL

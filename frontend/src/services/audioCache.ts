@@ -1,72 +1,51 @@
 import type { CuratedTrack } from '../types';
-import { API_BASE_URL, AUTH_TOKEN_STORAGE_KEY } from './api';
+import { fetchCuratedRelaxingTracks } from './jamendoService';
+import {
+  AUDIO_CACHE_NAME,
+  TRACKS_META_STORAGE_KEY,
+  cacheTrackOffline,
+  saveTracksMetadata,
+} from './musicOfflineCache';
 
-export const AUDIO_CACHE_NAME = 'calm-panic-audio-v1';
-export const TRACKS_META_STORAGE_KEY = 'calm_cached_tracks_v1';
+export { AUDIO_CACHE_NAME, TRACKS_META_STORAGE_KEY };
 
 /**
- * Busca 5 faixas personalizadas em GET /bot/tracks e armazena os arquivos MP3
- * no Cache Storage do navegador para reprodução imediata offline.
+ * Busca faixas personalizadas em GET /bot/tracks e armazena automaticamente
+ * as primeiras faixas no Cache API ('anti-panic-audio-v1') + IndexedDB para uso offline.
  */
-export async function prefetchOfflineTracks(tokenOverride?: string | null): Promise<CuratedTrack[]> {
-  if (!navigator.onLine || !('caches' in window)) {
+export async function prefetchOfflineTracks(
+  tokenOverride?: string | null
+): Promise<CuratedTrack[]> {
+  if (!navigator.onLine) {
     return [];
   }
 
-  const token = tokenOverride ?? window.localStorage.getItem(AUTH_TOKEN_STORAGE_KEY);
-  if (!token) return [];
-
   try {
-    const response = await fetch(`${API_BASE_URL}/bot/tracks`, {
-      method: 'GET',
-      headers: {
-        Authorization: `Bearer ${token}`,
-        Accept: 'application/json',
-      },
-    });
-
-    if (!response.ok) return [];
-
-    const data = (await response.json()) as { tracks?: CuratedTrack[] };
-    const incomingTracks = Array.isArray(data.tracks) ? data.tracks : [];
+    const incomingTracks = await fetchCuratedRelaxingTracks(tokenOverride);
     if (incomingTracks.length === 0) return [];
 
-    const cache = await caches.open(AUDIO_CACHE_NAME);
-    const cachedList: CuratedTrack[] = [];
+    await saveTracksMetadata(incomingTracks);
 
-    await Promise.allSettled(
-      incomingTracks.map(async (track) => {
-        const existing = await cache.match(track.audioUrl);
-        if (existing) {
-          cachedList.push(track);
-          return;
-        }
-
-        const audioResponse = await fetch(track.audioUrl, { mode: 'cors' });
-        if (audioResponse.ok) {
-          await cache.put(track.audioUrl, audioResponse.clone());
-          cachedList.push(track);
-        }
-      })
+    // Pré-baixa automaticamente as 3 primeiras faixas para pronta-entrega offline no celular
+    const toAutoCache = incomingTracks.slice(0, 3);
+    const results = await Promise.allSettled(
+      toAutoCache.map((track) => cacheTrackOffline(track, tokenOverride))
     );
 
-    if (cachedList.length > 0) {
-      const keepUrls = new Set(cachedList.map((track) => track.audioUrl));
-      const existingRequests = await cache.keys();
-      await Promise.all(
-        existingRequests
-          .filter((req) => !keepUrls.has(req.url))
-          .map((req) => cache.delete(req))
-      );
-
-      try {
-        window.localStorage.setItem(TRACKS_META_STORAGE_KEY, JSON.stringify(cachedList));
-      } catch {
-        // Ignora erro de quota
+    const updated = incomingTracks.map((track, idx) => {
+      if (idx < toAutoCache.length && results[idx]?.status === 'fulfilled' && results[idx].value.ok) {
+        return {
+          ...track,
+          isCached: true,
+          sizeBytes: results[idx].value.sizeBytes,
+          cachedAt: new Date().toISOString(),
+        };
       }
-    }
+      return track;
+    });
 
-    return cachedList;
+    await saveTracksMetadata(updated);
+    return updated;
   } catch {
     return [];
   }

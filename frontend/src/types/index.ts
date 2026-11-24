@@ -35,10 +35,17 @@ export interface CuratedTrack {
   title: string;
   artist: string;
   audioUrl: string;
+  downloadUrl?: string;
+  audioDownloadAllowed?: boolean;
   duration: number;
   coverUrl: string | null;
   genre: string;
   moodTag: 'happy' | 'uplifting' | 'calming' | 'relaxing';
+  licenseUrl?: string | null;
+  source?: 'jamendo' | 'local';
+  isCached?: boolean;
+  cachedAt?: string;
+  sizeBytes?: number;
 }
 
 export type ChatSender = 'USER' | 'FRIEND';

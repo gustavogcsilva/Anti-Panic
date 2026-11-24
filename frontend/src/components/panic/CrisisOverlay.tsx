@@ -1,26 +1,20 @@
-import { CheckCircle2, MessageCircleHeart, Music, PhoneCall, SkipForward } from 'lucide-react';
+import { CheckCircle2, MessageCircleHeart, PhoneCall } from 'lucide-react';
 import { useState } from 'react';
-import type { CuratedTrack } from '../../hooks/usePanicMode';
 import { FriendChatPanel } from '../chat/FriendChatPanel';
+import { RelaxingMusicPlayer } from '../music/RelaxingMusicPlayer';
 import { BreathingGuide } from './BreathingGuide';
 
 interface CrisisOverlayProps {
-  currentTrack: CuratedTrack | null;
-  audioError: string | null;
   friendName?: string;
   emergencyContactName?: string | null;
   emergencyContactPhone?: string | null;
-  onSwitchTrack: () => Promise<void>;
   onStop: () => void;
 }
 
 export function CrisisOverlay({
-  currentTrack,
-  audioError,
   friendName = 'Amigo',
   emergencyContactName,
   emergencyContactPhone,
-  onSwitchTrack,
   onStop,
 }: CrisisOverlayProps) {
   const [isChatPopupOpen, setIsChatPopupOpen] = useState(false);
@@ -38,27 +32,14 @@ export function CrisisOverlay({
         </span>
       </div>
 
-      <div className="my-4 flex flex-col items-center">
+      <div className="mx-auto my-4 flex w-full max-w-md flex-col items-center gap-5">
         <BreathingGuide />
 
-        <div className="mt-5 w-full max-w-sm rounded-2xl border border-white/15 bg-white/10 px-4 py-3 text-center backdrop-blur">
-          <div className="flex items-center justify-center gap-2 text-xs uppercase tracking-wider text-calm-200">
-            <Music className="h-3.5 w-3.5" />
-            Tocando agora (Offline-First)
-          </div>
-          <p className="mt-1 truncate text-sm font-semibold text-white">
-            {currentTrack?.title ?? 'Melodia Acolhedora'}
-          </p>
-          <p className="truncate text-xs text-calm-200">
-            {currentTrack?.artist ?? 'Respira'}
-          </p>
-          {audioError && (
-            <p className="mt-2 text-xs text-amber-200">{audioError}</p>
-          )}
-        </div>
+        {/* Player de Música completo sempre visível no Modo Crise */}
+        <RelaxingMusicPlayer variant="crisis" />
       </div>
 
-      <div className="mx-auto w-full max-w-sm space-y-3">
+      <div className="mx-auto w-full max-w-md space-y-3">
         {/* Botão de Acesso Rápido ao Pop-up de Conversa com o Amigo */}
         <button
           type="button"
@@ -69,25 +50,14 @@ export function CrisisOverlay({
           <span>Conversar com {friendName} agora (Texto ou Áudio)</span>
         </button>
 
-        <div className="grid grid-cols-2 gap-3">
-          <button
-            type="button"
-            onClick={() => void onSwitchTrack()}
-            className="flex items-center justify-center gap-2 rounded-2xl border border-white/20 bg-white/10 px-4 py-3.5 text-sm font-semibold text-white transition hover:bg-white/20"
-          >
-            <SkipForward className="h-4 w-4" />
-            Trocar Música
-          </button>
-
-          <button
-            type="button"
-            onClick={onStop}
-            className="flex items-center justify-center gap-2 rounded-2xl bg-emerald-500 px-4 py-3.5 text-sm font-semibold text-slate-950 shadow-lg transition hover:bg-emerald-400"
-          >
-            <CheckCircle2 className="h-4 w-4" />
-            Estou Melhor
-          </button>
-        </div>
+        <button
+          type="button"
+          onClick={onStop}
+          className="flex w-full items-center justify-center gap-2 rounded-2xl bg-emerald-500 px-4 py-3.5 text-sm font-bold text-slate-950 shadow-lg transition hover:bg-emerald-400"
+        >
+          <CheckCircle2 className="h-4 w-4" />
+          Estou Melhor — Encerrar Modo Crise
+        </button>
 
         <div className="grid grid-cols-1 gap-2.5 pt-1 sm:grid-cols-2">
           <a

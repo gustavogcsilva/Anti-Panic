@@ -7,7 +7,7 @@ export default defineConfig({
     react(),
     VitePWA({
       registerType: 'autoUpdate',
-      includeAssets: ['icons/icon.svg', 'audio/fallback-calm.mp3'],
+      includeAssets: ['icons/icon.svg', 'audio/fallback-calm.wav'],
       manifest: {
         name: 'Respira — Apoio Emocional Imediato',
         short_name: 'Respira',
@@ -30,22 +30,18 @@ export default defineConfig({
         ],
       },
       workbox: {
-        globPatterns: ['**/*.{js,css,html,ico,png,svg,mp3,woff2}'],
+        globPatterns: ['**/*.{js,css,html,ico,png,svg,wav,woff2}'],
+        // Não intercepta requisições de streaming MP3 / Range (bytes=0-) do Jamendo nem do proxy,
+        // evitando falhas de reprodução no iOS Safari e Chrome Android. O cache offline dos MP3s é
+        // gerenciado diretamente via Cache API ('anti-panic-audio-v1') + IndexedDB com ObjectURLs.
         runtimeCaching: [
           {
-            urlPattern: /^https:\/\/.*jamendo\.com\/.*\.(mp3|ogg|audio).*/i,
-            handler: 'CacheFirst',
-            options: {
-              cacheName: 'calm-panic-audio-v1',
-              rangeRequests: true,
-              expiration: {
-                maxEntries: 12,
-                maxAgeSeconds: 60 * 60 * 24 * 30, // 30 dias
-              },
-              cacheableResponse: {
-                statuses: [0, 200, 206],
-              },
-            },
+            urlPattern: /^https:\/\/.*jamendo\.com\/.*/i,
+            handler: 'NetworkOnly',
+          },
+          {
+            urlPattern: /\/bot\/audio-proxy/i,
+            handler: 'NetworkOnly',
           },
         ],
       },

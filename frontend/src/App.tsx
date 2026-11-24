@@ -2,6 +2,7 @@ import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
 import { ProtectedRoute, PublicOnlyRoute } from './components/auth/ProtectedRoute';
 import { BackendColdStartBanner } from './components/common/BackendColdStartBanner';
 import { AuthProvider } from './contexts/AuthContext';
+import { MusicPlayerProvider } from './contexts/MusicPlayerContext';
 import { ThemeProvider } from './contexts/ThemeContext';
 import { ForgotPassword } from './pages/ForgotPassword';
 import { Chat } from './pages/Chat';
@@ -15,7 +16,8 @@ export function App() {
   return (
     <AuthProvider>
       <ThemeProvider>
-        <BrowserRouter>
+        <MusicPlayerProvider>
+          <BrowserRouter>
         <Routes>
           <Route
             path="/login"
@@ -75,8 +77,9 @@ export function App() {
           />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
-        <BackendColdStartBanner />
-        </BrowserRouter>
+          <BackendColdStartBanner />
+          </BrowserRouter>
+        </MusicPlayerProvider>
       </ThemeProvider>
     </AuthProvider>
   );
