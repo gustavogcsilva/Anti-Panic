@@ -53,6 +53,7 @@ interface MusicPlayerContextValue {
   stop: () => void;
   nextTrack: () => Promise<void>;
   previousTrack: () => Promise<void>;
+  discoverNewTrack: () => Promise<void>;
   seekTo: (seconds: number) => void;
   setVolume: (nextVolume: number) => void;
   toggleMute: () => void;
@@ -90,6 +91,7 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
 
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const objectUrlCacheRef = useRef<Map<string, string>>(new Map());
+  const tracksRef = useRef<CuratedTrack[]>([LOCAL_FALLBACK_TRACK]);
   const currentTrackRef = useRef<CuratedTrack>(LOCAL_FALLBACK_TRACK);
   const volumeRef = useRef(0.85);
   const isMutedRef = useRef(false);
@@ -98,10 +100,14 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
   const currentTrack = tracks[safeIndex] ?? LOCAL_FALLBACK_TRACK;
 
   useEffect(() => {
+    tracksRef.current = tracks;
+  }, [tracks]);
+
+  useEffect(() => {
     currentTrackRef.current = currentTrack;
   }, [currentTrack]);
 
-  // Garante uma instância única e persistente de <audio> (essencial para iOS Safari / Chrome Android)
+  // Instância única e persistente de <audio> (essencial para políticas de autoplay iOS/Android)
   const getAudioElement = useCallback((): HTMLAudioElement => {
     if (!audioRef.current) {
       const audio = new Audio();
@@ -109,7 +115,6 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
       audio.loop = false;
       audio.volume = volumeRef.current;
       audio.muted = isMutedRef.current;
-      // Compatibilidade explícita para reprodução inline no iOS Safari
       (audio as HTMLAudioElement & { playsInline?: boolean }).playsInline = true;
       audio.setAttribute('playsinline', 'true');
       audioRef.current = audio;
@@ -122,7 +127,6 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
     setCacheStats(stats);
   }, []);
 
-  // Pré-aquece ObjectURLs das faixas já cacheadas para disparo síncrono dentro do clique (0ms)
   const warmCachedObjectUrls = useCallback(async (trackList: CuratedTrack[]) => {
     for (const track of trackList) {
       if (track.source === 'local' || track.audioUrl === LOCAL_FALLBACK_AUDIO_URL) continue;
@@ -197,6 +201,158 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
     [refreshCacheStats, token]
   );
 
+  /**
+   * Reproduz uma faixa com troca garantida de src + audio.load() + audio.play(),
+   * pulando automaticamente para a próxima faixa válida caso alguma URL específica falhe.
+   */
+  const playTrackInternal = useCallback(
+    async (
+      explicitTrack?: CuratedTrack,
+      customTrackList?: CuratedTrack[],
+      attemptCount = 0
+    ): Promise<void> => {
+      const activeList =
+        customTrackList && customTrackList.length > 0 ? customTrackList : tracksRef.current;
+      const targetTrack = explicitTrack ?? currentTrackRef.current ?? LOCAL_FALLBACK_TRACK;
+
+      const foundIdx = activeList.findIndex((t) => t.id === targetTrack.id);
+      if (foundIdx >= 0) {
+        setCurrentIndex(foundIdx);
+      }
+      currentTrackRef.current = targetTrack;
+      setCurrentTime(0);
+      setDuration(targetTrack.duration || 0);
+
+      if (attemptCount === 0) {
+        setAudioError(null);
+      }
+      setIsBuffering(true);
+
+      const audio = getAudioElement();
+      audio.volume = volumeRef.current;
+      audio.muted = isMutedRef.current;
+
+      const tryPlaySrc = async (
+        src: string,
+        status: PlaybackSourceStatus,
+        loopTrack = false
+      ): Promise<boolean> => {
+        try {
+          audio.pause();
+          audio.removeAttribute('src');
+          audio.src = src;
+          audio.loop = loopTrack;
+          audio.currentTime = 0;
+          audio.load();
+          setPlaybackStatus(status);
+
+          const playPromise = audio.play();
+          if (playPromise !== undefined) {
+            await playPromise;
+          }
+
+          setIsPlaying(true);
+          setIsBuffering(false);
+          return true;
+        } catch {
+          return false;
+        }
+      };
+
+      // 1. ObjectURL pré-aquecido em memória (cache offline instantâneo)
+      const prewarmedUrl = objectUrlCacheRef.current.get(targetTrack.id);
+      if (prewarmedUrl) {
+        const ok = await tryPlaySrc(prewarmedUrl, 'offline', targetTrack.source === 'local');
+        if (ok) return;
+      }
+
+      // 2. Áudio local embutido
+      if (targetTrack.source === 'local' || targetTrack.audioUrl === LOCAL_FALLBACK_AUDIO_URL) {
+        const ok = await tryPlaySrc(LOCAL_FALLBACK_AUDIO_URL, 'offline', true);
+        if (ok) return;
+      }
+
+      // 3. Cache API / IndexedDB sob demanda -> Blob local
+      const cachedBlobUrl = await getOfflineTrackObjectUrl(targetTrack);
+      if (cachedBlobUrl) {
+        if (cachedBlobUrl.startsWith('blob:')) {
+          objectUrlCacheRef.current.set(targetTrack.id, cachedBlobUrl);
+        }
+        const ok = await tryPlaySrc(cachedBlobUrl, 'offline', false);
+        if (ok) return;
+      }
+
+      // 4. Sem internet: cai para áudio local de emergência
+      if (!navigator.onLine) {
+        setAudioError(
+          'Sem internet e esta faixa não foi baixada. Tocando o áudio local acolhedor.'
+        );
+        const ok = await tryPlaySrc(LOCAL_FALLBACK_AUDIO_URL, 'offline', true);
+        if (!ok) {
+          setIsBuffering(false);
+          setIsPlaying(false);
+        }
+        return;
+      }
+
+      // 5. Online: tenta URL direta do Jamendo primeiro (sem CORS em <audio> e sem latência de cold start),
+      // e em seguida o proxy do backend (/bot/audio-proxy) como alternativa segura
+      const streamCandidates = [
+        targetTrack.audioUrl,
+        buildBackendAudioProxyUrl(targetTrack.audioUrl, token),
+      ].filter((u, idx, arr) => Boolean(u) && arr.indexOf(u) === idx);
+
+      for (const streamUrl of streamCandidates) {
+        const ok = await tryPlaySrc(streamUrl, 'online', false);
+        if (ok) {
+          // Salva silenciosamente no cache offline do celular ao tocar online
+          if (!targetTrack.isCached && targetTrack.source === 'jamendo') {
+            void saveTrackOffline(targetTrack);
+          }
+          return;
+        }
+      }
+
+      // 6. Se esta faixa online específica falhou, pula automaticamente para a próxima válida na lista
+      if (attemptCount < 3 && activeList.length > 1) {
+        const currentPos = foundIdx >= 0 ? foundIdx : 0;
+        const nextPos = (currentPos + 1) % activeList.length;
+        const nextCandidate = activeList[nextPos];
+        if (nextCandidate && nextCandidate.id !== targetTrack.id) {
+          setAudioError(
+            `A faixa "${targetTrack.title}" falhou ao carregar. Pulando para "${nextCandidate.title}"...`
+          );
+          await playTrackInternal(nextCandidate, activeList, attemptCount + 1);
+          return;
+        }
+      }
+
+      // 7. Última rede de segurança: áudio local embutido
+      const fallbackOk = await tryPlaySrc(LOCAL_FALLBACK_AUDIO_URL, 'offline', true);
+      if (fallbackOk) {
+        setAudioError(
+          'Não foi possível carregar o streaming online agora. Reproduzindo áudio local acolhedor.'
+        );
+        return;
+      }
+
+      setIsBuffering(false);
+      setIsPlaying(false);
+      setPlaybackStatus('idle');
+      setAudioError(
+        'Toque no botão Play para liberar o áudio no navegador.'
+      );
+    },
+    [getAudioElement, saveTrackOffline, token]
+  );
+
+  const playTrack = useCallback(
+    async (explicitTrack?: CuratedTrack) => {
+      await playTrackInternal(explicitTrack);
+    },
+    [playTrackInternal]
+  );
+
   // Carrega faixas do cache local (IndexedDB) e atualiza online com Jamendo
   const refreshTracks = useCallback(async () => {
     setIsLoadingTracks(true);
@@ -207,6 +363,7 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
       const saved = await loadSavedTracksMetadata();
       if (saved.length > 0) {
         const enrichedSaved = await markCachedStatus(saved);
+        tracksRef.current = enrichedSaved;
         setTracks(enrichedSaved);
         void warmCachedObjectUrls(enrichedSaved);
       }
@@ -215,7 +372,10 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
         const incoming = await fetchCuratedRelaxingTracks(token);
         if (incoming.length > 0) {
           const enrichedIncoming = await markCachedStatus(incoming);
+          tracksRef.current = enrichedIncoming;
           setTracks(enrichedIncoming);
+          setCurrentIndex(0);
+          currentTrackRef.current = enrichedIncoming[0];
           setActiveSearchQuery('');
           await saveTracksMetadata(enrichedIncoming);
           void warmCachedObjectUrls(enrichedIncoming);
@@ -230,6 +390,7 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
               toAutoCache.map((t) => cacheTrackOffline(t, token))
             ).then(async () => {
               const updatedList = await markCachedStatus(enrichedIncoming);
+              tracksRef.current = updatedList;
               setTracks(updatedList);
               await saveTracksMetadata(updatedList);
               await warmCachedObjectUrls(updatedList);
@@ -247,7 +408,7 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
     }
   }, [isAuthenticated, markCachedStatus, refreshCacheStats, token, warmCachedObjectUrls]);
 
-  // Pesquisa novas faixas relaxantes na API do Jamendo (ex: "chuva", "piano", "meditação", "natureza")
+  // Pesquisa novas faixas relaxantes na API do Jamendo e já entra na playlist ativa tocando
   const searchTracks = useCallback(
     async (query: string) => {
       const cleaned = query.trim();
@@ -268,12 +429,19 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
         const results = await searchRelaxingTracks(cleaned, token);
         if (results.length > 0) {
           const enriched = await markCachedStatus(results);
+          tracksRef.current = enriched;
           setTracks(enriched);
           setCurrentIndex(0);
+          currentTrackRef.current = enriched[0];
           await saveTracksMetadata(enriched);
           void warmCachedObjectUrls(enriched);
+
+          // Já inicia a reprodução da primeira música encontrada (dentro do gesto do usuário)
+          await playTrackInternal(enriched[0], enriched, 0);
         } else {
-          setAudioError('Nenhuma faixa encontrada para esse termo. Tente "piano", "chuva" ou "meditação".');
+          setAudioError(
+            'Nenhuma música online encontrada agora. Verifique sua conexão ou tente "piano", "chuva" ou "meditação".'
+          );
         }
       } catch {
         setAudioError('Erro ao buscar músicas no Jamendo. Tente novamente.');
@@ -282,128 +450,68 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
         setPlaybackStatus((prev) => (prev === 'loading' ? 'idle' : prev));
       }
     },
-    [markCachedStatus, token, warmCachedObjectUrls]
+    [markCachedStatus, playTrackInternal, token, warmCachedObjectUrls]
   );
 
-  /**
-   * Reproduz uma faixa diretamente no evento de clique/toque do usuário (política de autoplay mobile).
-   * Ordem de prioridade:
-   * 1) ObjectURL local já aquecido do Cache API / IndexedDB -> reprodução 100% offline (0ms);
-   * 2) Cache API / IndexedDB sob demanda -> Blob local;
-   * 3) Online: streaming via proxy CORS-safe do backend (/bot/audio-proxy) + auto-cache em segundo plano;
-   * 4) Fallback de rede: URL direta do Jamendo -> áudio acolhedor local (/audio/fallback-calm.wav).
-   */
-  const playTrack = useCallback(
-    async (explicitTrack?: CuratedTrack) => {
-      const targetTrack = explicitTrack ?? currentTrackRef.current ?? LOCAL_FALLBACK_TRACK;
-      if (explicitTrack) {
-        const foundIdx = tracks.findIndex((t) => t.id === explicitTrack.id);
-        if (foundIdx >= 0) {
-          setCurrentIndex(foundIdx);
-        }
+  // Botão "Nova Música": sorteia novas faixas online do Jamendo (com offset aleatório) e já toca
+  const discoverNewTrack = useCallback(async () => {
+    setAudioError(null);
+
+    if (!navigator.onLine) {
+      // Se offline, alterna entre as faixas já disponíveis localmente
+      const list = tracksRef.current;
+      if (list.length > 1) {
+        const nextIdx = (currentIndex + 1) % list.length;
+        setCurrentIndex(nextIdx);
+        await playTrackInternal(list[nextIdx], list, 0);
+      } else {
+        await playTrackInternal(LOCAL_FALLBACK_TRACK, list, 0);
       }
+      return;
+    }
 
-      setAudioError(null);
-      setIsBuffering(true);
+    setIsLoadingTracks(true);
+    setPlaybackStatus('loading');
 
-      const audio = getAudioElement();
-      audio.volume = volumeRef.current;
-      audio.muted = isMutedRef.current;
+    try {
+      const incoming = activeSearchQuery
+        ? await searchRelaxingTracks(activeSearchQuery, token)
+        : await fetchCuratedRelaxingTracks(token);
 
-      const playWithSrc = async (
-        src: string,
-        status: PlaybackSourceStatus,
-        loopTrack = false
-      ): Promise<boolean> => {
-        try {
-          audio.pause();
-          audio.src = src;
-          audio.loop = loopTrack;
-          audio.load();
-          setPlaybackStatus(status);
-          const playPromise = audio.play();
-          if (playPromise !== undefined) {
-            await playPromise;
-          }
-          setIsPlaying(true);
-          setIsBuffering(false);
-          return true;
-        } catch {
-          return false;
-        }
-      };
+      if (incoming.length > 0) {
+        const enriched = await markCachedStatus(incoming);
+        // Garante que a faixa sorteada seja diferente da que estava tocando
+        const currentId = currentTrackRef.current.id;
+        const pickedIdx = enriched.findIndex((t) => t.id !== currentId && t.source === 'jamendo');
+        const targetIdx = pickedIdx >= 0 ? pickedIdx : 0;
 
-      // 1. Verifica ObjectURL pré-aquecido em memória (disparo síncrono, ideal para Safari iOS)
-      const prewarmedUrl = objectUrlCacheRef.current.get(targetTrack.id);
-      if (prewarmedUrl) {
-        const ok = await playWithSrc(prewarmedUrl, 'offline', targetTrack.source === 'local');
-        if (ok) return;
-      }
+        tracksRef.current = enriched;
+        setTracks(enriched);
+        setCurrentIndex(targetIdx);
+        currentTrackRef.current = enriched[targetIdx];
+        await saveTracksMetadata(enriched);
+        void warmCachedObjectUrls(enriched);
 
-      // 2. Verifica se é áudio local embutido
-      if (targetTrack.source === 'local' || targetTrack.audioUrl === LOCAL_FALLBACK_AUDIO_URL) {
-        const ok = await playWithSrc(LOCAL_FALLBACK_AUDIO_URL, 'offline', true);
-        if (ok) return;
-      }
-
-      // 3. Verifica Cache API / IndexedDB antes de qualquer requisição de rede
-      const cachedBlobUrl = await getOfflineTrackObjectUrl(targetTrack);
-      if (cachedBlobUrl) {
-        if (cachedBlobUrl.startsWith('blob:')) {
-          objectUrlCacheRef.current.set(targetTrack.id, cachedBlobUrl);
-        }
-        const ok = await playWithSrc(cachedBlobUrl, 'offline', false);
-        if (ok) return;
-      }
-
-      // 4. Se está offline e a faixa não estava no cache, reproduz áudio local de emergência
-      if (!navigator.onLine) {
+        await playTrackInternal(enriched[targetIdx], enriched, 0);
+      } else {
         setAudioError(
-          'Esta faixa não foi baixada para uso offline. Tocando a melodia local de emergência.'
+          'Não foi possível buscar novas músicas online no momento. Mantendo a playlist atual.'
         );
-        const ok = await playWithSrc(LOCAL_FALLBACK_AUDIO_URL, 'offline', true);
-        if (!ok) {
-          setIsBuffering(false);
-          setIsPlaying(false);
-        }
-        return;
       }
-
-      // 5. Online: streaming via proxy do backend (evita CORS) -> fallback URL direta do Jamendo
-      const streamCandidates = [
-        buildBackendAudioProxyUrl(targetTrack.audioUrl, token),
-        targetTrack.audioUrl,
-      ].filter((u, idx, arr) => Boolean(u) && arr.indexOf(u) === idx);
-
-      for (const streamUrl of streamCandidates) {
-        const ok = await playWithSrc(streamUrl, 'online', false);
-        if (ok) {
-          // Salva silenciosamente no cache offline do celular ao tocar online
-          if (!targetTrack.isCached && targetTrack.source === 'jamendo') {
-            void saveTrackOffline(targetTrack);
-          }
-          return;
-        }
-      }
-
-      // 6. Rede de segurança final: áudio local garantido (/audio/fallback-calm.wav)
-      const fallbackOk = await playWithSrc(LOCAL_FALLBACK_AUDIO_URL, 'offline', true);
-      if (fallbackOk) {
-        setAudioError(
-          'Streaming externo indisponível no momento. Reproduzindo melodia local acolhedora.'
-        );
-        return;
-      }
-
-      setIsBuffering(false);
-      setIsPlaying(false);
-      setPlaybackStatus('idle');
-      setAudioError(
-        'O navegador bloqueou o início automático do som. Toque no botão Play para iniciar a música.'
-      );
-    },
-    [getAudioElement, saveTrackOffline, token, tracks]
-  );
+    } catch {
+      setAudioError('Falha ao buscar nova música online. Tente novamente em instantes.');
+    } finally {
+      setIsLoadingTracks(false);
+      setPlaybackStatus((prev) => (prev === 'loading' ? 'idle' : prev));
+    }
+  }, [
+    activeSearchQuery,
+    currentIndex,
+    markCachedStatus,
+    playTrackInternal,
+    token,
+    warmCachedObjectUrls,
+  ]);
 
   const pause = useCallback(() => {
     const audio = audioRef.current;
@@ -433,7 +541,6 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
       return;
     }
 
-    // Se já existe uma fonte carregada e pronta no <audio>, retoma sincronamente no clique
     if (audio.src && audio.readyState >= 2) {
       try {
         await audio.play();
@@ -445,28 +552,30 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
       }
     }
 
-    await playTrack(currentTrackRef.current);
-  }, [getAudioElement, isPlaying, playTrack]);
+    await playTrackInternal(currentTrackRef.current);
+  }, [getAudioElement, isPlaying, playTrackInternal]);
 
   const nextTrack = useCallback(async () => {
-    if (tracks.length === 0) {
-      await playTrack(LOCAL_FALLBACK_TRACK);
+    const list = tracksRef.current;
+    if (list.length === 0) {
+      await playTrackInternal(LOCAL_FALLBACK_TRACK);
       return;
     }
-    const nextIdx = (currentIndex + 1) % tracks.length;
+    const nextIdx = (currentIndex + 1) % list.length;
     setCurrentIndex(nextIdx);
-    await playTrack(tracks[nextIdx]);
-  }, [currentIndex, playTrack, tracks]);
+    await playTrackInternal(list[nextIdx], list, 0);
+  }, [currentIndex, playTrackInternal]);
 
   const previousTrack = useCallback(async () => {
-    if (tracks.length === 0) {
-      await playTrack(LOCAL_FALLBACK_TRACK);
+    const list = tracksRef.current;
+    if (list.length === 0) {
+      await playTrackInternal(LOCAL_FALLBACK_TRACK);
       return;
     }
-    const prevIdx = (currentIndex - 1 + tracks.length) % tracks.length;
+    const prevIdx = (currentIndex - 1 + list.length) % list.length;
     setCurrentIndex(prevIdx);
-    await playTrack(tracks[prevIdx]);
-  }, [currentIndex, playTrack, tracks]);
+    await playTrackInternal(list[prevIdx], list, 0);
+  }, [currentIndex, playTrackInternal]);
 
   const seekTo = useCallback((seconds: number) => {
     const audio = audioRef.current;
@@ -522,7 +631,7 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
     await refreshCacheStats();
   }, [playbackStatus, refreshCacheStats]);
 
-  // Liga os eventos nativos do elemento <audio> (progresso, duração, fim de faixa)
+  // Liga os eventos nativos do elemento <audio>
   useEffect(() => {
     const audio = getAudioElement();
 
@@ -546,7 +655,7 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
     const handlePlay = () => setIsPlaying(true);
     const handlePause = () => setIsPlaying(false);
     const handleEnded = () => {
-      if (tracks.length > 1) {
+      if (tracksRef.current.length > 1) {
         void nextTrack();
       } else {
         audio.currentTime = 0;
@@ -571,7 +680,7 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
       audio.removeEventListener('pause', handlePause);
       audio.removeEventListener('ended', handleEnded);
     };
-  }, [getAudioElement, nextTrack, tracks.length]);
+  }, [getAudioElement, nextTrack]);
 
   // Monitora conectividade e sincroniza faixas quando autenticado
   useEffect(() => {
@@ -596,7 +705,6 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
     };
   }, [isAuthenticated, refreshTracks]);
 
-  // Cleanup ao desmontar o app
   useEffect(() => {
     const urlsMap = objectUrlCacheRef.current;
     return () => {
@@ -634,6 +742,7 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
       stop,
       nextTrack,
       previousTrack,
+      discoverNewTrack,
       seekTo,
       setVolume,
       toggleMute,
@@ -665,6 +774,7 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
       stop,
       nextTrack,
       previousTrack,
+      discoverNewTrack,
       seekTo,
       setVolume,
       toggleMute,

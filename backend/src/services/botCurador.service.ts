@@ -66,7 +66,7 @@ const PERSONALIZED_MOODS: Array<'happy' | 'uplifting' | 'calming' | 'relaxing'> 
   'relaxing',
   'uplifting',
 ];
-const RELAXING_DEFAULT_TAGS = ['ambient+relaxation', 'meditation+relaxing', 'ambient+calm'];
+const RELAXING_DEFAULT_TAGS = ['ambient relaxation', 'meditation relaxing', 'ambient calm'];
 
 const PT_TO_EN_MOOD_MAP: Record<string, string> = {
   chuva: 'rain',
@@ -149,6 +149,9 @@ export class BotCuradorService {
    */
   public async getCuratedTracksForUser(userId: string): Promise<CuratedTrack[]> {
     if (!this.hasValidJamendoKey()) {
+      console.warn(
+        '[BotCuradorService] JAMENDO_CLIENT_ID não configurado no backend. Usando faixas locais de fallback.'
+      );
       return [...FALLBACK_CURATED_TRACKS];
     }
 
@@ -168,20 +171,24 @@ export class BotCuradorService {
 
     const queryPromises: Array<Promise<CuratedTrack[]>> = [];
 
+    const randomOffset = Math.floor(Math.random() * 40);
+
     if (useRandomMode) {
-      // Busca faixas instrumentais e relaxantes no Jamendo com tags dedicadas
+      // Busca faixas instrumentais e relaxantes no Jamendo com offset aleatório para variedade
       queryPromises.push(
-        this.fetchFromJamendo({
-          tags: 'ambient+relaxation+meditation',
+        this.fetchFromJamendoWithFallbackOffset({
+          fuzzytags: 'ambient relaxation meditation',
           moodTag: 'calming',
           instrumental: true,
+          offset: randomOffset,
         })
       );
-      for (const tagCombo of RELAXING_DEFAULT_TAGS) {
+      for (const tagCombo of this.shuffleArray(RELAXING_DEFAULT_TAGS).slice(0, 2)) {
         queryPromises.push(
-          this.fetchFromJamendo({
+          this.fetchFromJamendoWithFallbackOffset({
             fuzzytags: tagCombo,
             moodTag: 'relaxing',
+            offset: Math.floor(Math.random() * 30),
           })
         );
       }
@@ -191,10 +198,11 @@ export class BotCuradorService {
         const moodTag = this.pickRandom(PERSONALIZED_MOODS);
         const mappedGenre = this.translateSearchTerm(genre);
         queryPromises.push(
-          this.fetchFromJamendo({
-            fuzzytags: `${mappedGenre}+${moodTag}`,
+          this.fetchFromJamendoWithFallbackOffset({
+            fuzzytags: `${mappedGenre} ${moodTag}`.trim(),
             genreLabel: genre,
             moodTag,
+            offset: Math.floor(Math.random() * 25),
           })
         );
       }
@@ -202,18 +210,20 @@ export class BotCuradorService {
       // 2. Consulta pelos artistas preferidos do usuário
       for (const artist of this.shuffleArray(artists).slice(0, 2)) {
         queryPromises.push(
-          this.fetchFromJamendo({
+          this.fetchFromJamendoWithFallbackOffset({
             search: artist,
             moodTag: 'uplifting',
+            offset: 0,
           })
         );
       }
 
       // 3. Sempre inclui uma consulta relaxante/ambient para garantir catálogo rico
       queryPromises.push(
-        this.fetchFromJamendo({
-          fuzzytags: 'ambient+relaxation+meditation',
+        this.fetchFromJamendoWithFallbackOffset({
+          fuzzytags: 'ambient relaxation meditation',
           moodTag: 'calming',
+          offset: randomOffset,
         })
       );
     }
@@ -231,13 +241,14 @@ export class BotCuradorService {
       }
     }
 
-    // Fallback secundário no Jamendo com mp31 e tag ampla caso a primeira consulta retorne poucas faixas
+    // Fallback secundário no Jamendo com mp31 e tag ampla (offset=0) caso a primeira consulta retorne poucas faixas
     if (trackMap.size < 4) {
       try {
         const broadTracks = await this.fetchFromJamendo({
-          fuzzytags: 'ambient+relaxing',
+          fuzzytags: 'ambient relaxing',
           moodTag: 'relaxing',
           audioFormat: 'mp31',
+          offset: 0,
         });
         for (const track of broadTracks) {
           if (!trackMap.has(track.id)) {
@@ -263,6 +274,9 @@ export class BotCuradorService {
   public async searchRelaxingTracks(rawQuery: string, limit = 10): Promise<CuratedTrack[]> {
     const cleanedQuery = rawQuery.trim().slice(0, 80);
     if (!this.hasValidJamendoKey()) {
+      console.warn(
+        '[BotCuradorService] JAMENDO_CLIENT_ID não configurado no backend. Usando faixas locais de fallback.'
+      );
       return [...FALLBACK_CURATED_TRACKS];
     }
 
@@ -271,31 +285,36 @@ export class BotCuradorService {
 
     const queryPromises: Array<Promise<CuratedTrack[]>> = [];
 
+    const randomOffset = Math.floor(Math.random() * 30);
+
     if (translated) {
-      // 1. Busca por tags combinadas (ex: "rain+ambient", "piano+relaxing", "meditation")
+      // 1. Busca por tags combinadas (espaço gera '+' correto no URLSearchParams, sem double-encode %2B)
       queryPromises.push(
-        this.fetchFromJamendo({
-          fuzzytags: `${translated}+relaxing`,
+        this.fetchFromJamendoWithFallbackOffset({
+          fuzzytags: `${translated} relaxing`,
           moodTag: 'relaxing',
           genreLabel: cleanedQuery,
           limit: safeLimit,
+          offset: randomOffset,
         })
       );
       // 2. Busca por nome/termo livre
       queryPromises.push(
-        this.fetchFromJamendo({
+        this.fetchFromJamendoWithFallbackOffset({
           search: translated,
           moodTag: 'calming',
           genreLabel: cleanedQuery,
           limit: safeLimit,
+          offset: Math.floor(Math.random() * 15),
         })
       );
     } else {
       queryPromises.push(
-        this.fetchFromJamendo({
-          fuzzytags: 'ambient+relaxation+meditation',
+        this.fetchFromJamendoWithFallbackOffset({
+          fuzzytags: 'ambient relaxation meditation',
           moodTag: 'calming',
           limit: safeLimit,
+          offset: randomOffset,
         })
       );
     }
@@ -313,13 +332,14 @@ export class BotCuradorService {
       }
     }
 
-    // Se a busca específica não achou nada, faz fallback para tags instrumentais relaxantes no Jamendo
+    // Se a busca específica não achou nada, faz fallback para tags instrumentais relaxantes no Jamendo (offset=0)
     if (trackMap.size === 0) {
       try {
         const fallbackJamendo = await this.fetchFromJamendo({
-          fuzzytags: 'ambient+relaxation+meditation',
+          fuzzytags: 'ambient relaxation meditation',
           moodTag: 'calming',
           limit: safeLimit,
+          offset: 0,
         });
         for (const track of fallbackJamendo) {
           trackMap.set(track.id, track);
@@ -334,7 +354,25 @@ export class BotCuradorService {
       return [...FALLBACK_CURATED_TRACKS];
     }
 
-    return list.slice(0, safeLimit);
+    return this.shuffleArray(list).slice(0, safeLimit);
+  }
+
+  private async fetchFromJamendoWithFallbackOffset(params: {
+    tags?: string;
+    fuzzytags?: string;
+    search?: string;
+    genreLabel?: string;
+    moodTag: 'happy' | 'uplifting' | 'calming' | 'relaxing';
+    instrumental?: boolean;
+    audioFormat?: 'mp32' | 'mp31';
+    limit?: number;
+    offset?: number;
+  }): Promise<CuratedTrack[]> {
+    const firstTry = await this.fetchFromJamendo(params);
+    if (firstTry.length > 0 || !params.offset) {
+      return firstTry;
+    }
+    return this.fetchFromJamendo({ ...params, offset: 0 });
   }
 
   private async fetchFromJamendo(params: {
@@ -346,6 +384,7 @@ export class BotCuradorService {
     instrumental?: boolean;
     audioFormat?: 'mp32' | 'mp31';
     limit?: number;
+    offset?: number;
   }): Promise<CuratedTrack[]> {
     const {
       tags,
@@ -356,12 +395,14 @@ export class BotCuradorService {
       instrumental = false,
       audioFormat = 'mp32',
       limit = JAMENDO_POOL_LIMIT,
+      offset = 0,
     } = params;
 
     const searchParams = new URLSearchParams({
       client_id: this.jamendoClientId,
       format: 'json',
       limit: String(limit),
+      offset: String(Math.max(0, offset)),
       audioformat: audioFormat,
       audiodlformat: audioFormat,
       include: 'musicinfo',
@@ -380,7 +421,7 @@ export class BotCuradorService {
     } else if (fuzzytags) {
       searchParams.set('fuzzytags', fuzzytags);
     } else {
-      searchParams.set('fuzzytags', 'ambient+relaxation+meditation');
+      searchParams.set('fuzzytags', 'ambient relaxation meditation');
     }
 
     const controller = new AbortController();
@@ -462,7 +503,7 @@ export class BotCuradorService {
 
     const words = normalized.split(/\s+/).filter(Boolean);
     const mapped = words.map((w) => PT_TO_EN_MOOD_MAP[w] ?? w.replace(/[^a-z0-9-]/g, ''));
-    return mapped.filter(Boolean).join('+');
+    return mapped.filter(Boolean).join(' ');
   }
 
   private isValidTrack(track: JamendoTrackResult): boolean {

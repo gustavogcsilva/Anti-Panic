@@ -10,6 +10,7 @@ import {
   Play,
   Radio,
   Search,
+  Shuffle,
   SkipBack,
   SkipForward,
   Trash2,
@@ -67,6 +68,7 @@ export function RelaxingMusicPlayer({ variant = 'full' }: RelaxingMusicPlayerPro
     togglePlayPause,
     nextTrack,
     previousTrack,
+    discoverNewTrack,
     seekTo,
     setVolume,
     toggleMute,
@@ -273,6 +275,22 @@ export function RelaxingMusicPlayer({ variant = 'full' }: RelaxingMusicPlayerPro
             }`}
           >
             <SkipForward className="h-4 w-4" />
+          </button>
+
+          <button
+            type="button"
+            disabled={isLoadingTracks}
+            onClick={() => void discoverNewTrack()}
+            title="Sortear e tocar uma nova música online do Jamendo"
+            aria-label="Nova Música"
+            className={`inline-flex h-10 items-center gap-1.5 rounded-full px-3 text-xs font-semibold transition active:scale-95 disabled:opacity-50 ${
+              isCrisisStyle
+                ? 'bg-white/15 text-white hover:bg-white/25'
+                : 'bg-calm-100 text-calm-800 hover:bg-calm-200'
+            }`}
+          >
+            <Shuffle className={`h-3.5 w-3.5 ${isLoadingTracks ? 'animate-spin' : ''}`} />
+            <span>Nova Música</span>
           </button>
         </div>
 
