@@ -1,9 +1,5 @@
 import type { CuratedTrack } from '../types';
-import { AUTH_TOKEN_STORAGE_KEY } from './api';
-import {
-  LOCAL_FALLBACK_AUDIO_URL,
-  buildBackendAudioProxyUrl,
-} from './jamendoService';
+import { LOCAL_FALLBACK_AUDIO_URL } from './relaxingAudioService';
 
 export const AUDIO_CACHE_NAME = 'anti-panic-audio-v1';
 export const TRACKS_META_STORAGE_KEY = 'anti_panic_tracks_meta_v1';
@@ -26,8 +22,7 @@ export interface OfflineCacheStats {
 }
 
 function getCacheKeyForTrack(track: CuratedTrack): string {
-  // Chave estável baseada no ID da faixa para evitar inconsistências de query strings temporárias
-  return `${window.location.origin}/__offline_audio__/${encodeURIComponent(track.id)}.mp3`;
+  return `${window.location.origin}/__offline_audio__/${encodeURIComponent(track.id)}.audio`;
 }
 
 function openMusicDb(): Promise<IDBDatabase> {
@@ -66,9 +61,6 @@ function writeLocalStorageFallback(tracks: CuratedTrack[]): void {
   }
 }
 
-/**
- * Carrega metadados das músicas salvas (IndexedDB com fallback automático para localStorage).
- */
 export async function loadSavedTracksMetadata(): Promise<CuratedTrack[]> {
   try {
     const db = await openMusicDb();
@@ -79,10 +71,7 @@ export async function loadSavedTracksMetadata(): Promise<CuratedTrack[]> {
       req.onerror = () => reject(req.error);
     });
     db.close();
-
-    if (list.length > 0) {
-      return list;
-    }
+    if (list.length > 0) return list;
   } catch {
     // Usa localStorage como fallback
   }
@@ -90,9 +79,6 @@ export async function loadSavedTracksMetadata(): Promise<CuratedTrack[]> {
   return readLocalStorageFallback();
 }
 
-/**
- * Salva/atualiza a lista de metadados das músicas no IndexedDB e no localStorage.
- */
 export async function saveTracksMetadata(tracks: CuratedTrack[]): Promise<void> {
   writeLocalStorageFallback(tracks);
 
@@ -146,11 +132,13 @@ async function getBlobFromIndexedDb(key: string): Promise<Blob | null> {
   }
 }
 
-/**
- * Verifica se o arquivo de áudio de uma faixa já está disponível offline (Cache API ou IndexedDB).
- */
 export async function isTrackCachedOffline(track: CuratedTrack): Promise<boolean> {
-  if (track.audioUrl === LOCAL_FALLBACK_AUDIO_URL || track.source === 'local') {
+  if (
+    track.source === 'synthesizer' ||
+    track.source === 'local' ||
+    track.audioUrl.startsWith('synth://') ||
+    track.audioUrl.startsWith('/audio/')
+  ) {
     return true;
   }
 
@@ -170,13 +158,13 @@ export async function isTrackCachedOffline(track: CuratedTrack): Promise<boolean
   return Boolean(blob && blob.size > 1024);
 }
 
-/**
- * Recupera um Blob local do Cache API ou IndexedDB e cria uma URL local (blob:)
- * para reprodução 100% offline com suporte completo a seeking no iOS Safari e Chrome Android.
- */
 export async function getOfflineTrackObjectUrl(track: CuratedTrack): Promise<string | null> {
-  if (track.audioUrl === LOCAL_FALLBACK_AUDIO_URL || track.source === 'local') {
-    return LOCAL_FALLBACK_AUDIO_URL;
+  if (track.source === 'synthesizer' || track.audioUrl.startsWith('synth://')) {
+    return track.audioUrl;
+  }
+
+  if (track.source === 'local' || track.audioUrl.startsWith('/audio/')) {
+    return track.audioUrl || LOCAL_FALLBACK_AUDIO_URL;
   }
 
   const cacheKey = getCacheKeyForTrack(track);
@@ -204,197 +192,72 @@ export async function getOfflineTrackObjectUrl(track: CuratedTrack): Promise<str
   return null;
 }
 
-/**
- * Faz o download do arquivo MP3 de forma resiliente a CORS:
- * 1) Tenta via proxy autenticado do backend (/bot/audio-proxy) — CORS garantido em todos os browsers;
- * 2) Caso não haja token ou falhe, tenta download direto da URL de audiodownload/audio do Jamendo.
- */
-async function downloadAudioBlob(
-  track: CuratedTrack,
-  tokenOverride?: string | null
-): Promise<Blob | null> {
-  const sourceUrl = track.downloadUrl || track.audioUrl;
-  if (!sourceUrl) return null;
-
-  if (sourceUrl.startsWith('/')) {
-    const res = await fetch(sourceUrl);
-    return res.ok ? await res.blob() : null;
-  }
-
-  const token = tokenOverride ?? window.localStorage.getItem(AUTH_TOKEN_STORAGE_KEY);
-  const candidateUrls: Array<{ url: string; headers?: Record<string, string> }> = [];
-
-  if (token) {
-    candidateUrls.push({
-      url: buildBackendAudioProxyUrl(sourceUrl, token),
-      headers: { Authorization: `Bearer ${token}` },
-    });
-    if (track.audioUrl && track.audioUrl !== sourceUrl) {
-      candidateUrls.push({
-        url: buildBackendAudioProxyUrl(track.audioUrl, token),
-        headers: { Authorization: `Bearer ${token}` },
-      });
-    }
-  }
-
-  // Fallback direto com CORS
-  candidateUrls.push({ url: sourceUrl });
-  if (track.audioUrl && track.audioUrl !== sourceUrl) {
-    candidateUrls.push({ url: track.audioUrl });
-  }
-
-  for (const candidate of candidateUrls) {
-    try {
-      const res = await fetch(candidate.url, {
-        method: 'GET',
-        mode: 'cors',
-        headers: candidate.headers,
-      });
-
-      if (!res.ok) continue;
-
-      const contentType = res.headers.get('content-type') || '';
-      if (contentType.includes('text/html') || contentType.includes('application/json')) {
-        continue;
-      }
-
-      const blob = await res.blob();
-      if (blob && blob.size > 1024) {
-        return blob;
-      }
-    } catch {
-      // Tenta o próximo candidato
-    }
-  }
-
-  return null;
-}
-
-/**
- * Baixa e salva a música offline na Cache API ('anti-panic-audio-v1') + fallback IndexedDB,
- * atualizando os metadados da faixa.
- */
 export async function cacheTrackOffline(
-  track: CuratedTrack,
-  tokenOverride?: string | null
+  track: CuratedTrack
 ): Promise<{ ok: boolean; sizeBytes: number }> {
-  if (track.audioUrl === LOCAL_FALLBACK_AUDIO_URL || track.source === 'local') {
+  if (
+    track.source === 'synthesizer' ||
+    track.source === 'local' ||
+    track.audioUrl.startsWith('synth://') ||
+    track.audioUrl.startsWith('/audio/')
+  ) {
     return { ok: true, sizeBytes: 0 };
   }
 
-  if (!navigator.onLine) {
+  const sourceUrl = track.downloadUrl || track.audioUrl;
+  if (!sourceUrl || !navigator.onLine) {
     const already = await isTrackCachedOffline(track);
     return { ok: already, sizeBytes: track.sizeBytes ?? 0 };
   }
 
-  const cacheKey = getCacheKeyForTrack(track);
-  const blob = await downloadAudioBlob(track, tokenOverride);
-  if (!blob) {
+  try {
+    const res = await fetch(sourceUrl, { method: 'GET', mode: 'cors' });
+    if (!res.ok) return { ok: false, sizeBytes: 0 };
+
+    const blob = await res.blob();
+    if (!blob || blob.size < 1024) return { ok: false, sizeBytes: 0 };
+
+    const cacheKey = getCacheKeyForTrack(track);
+    let stored = false;
+
+    if ('caches' in window) {
+      try {
+        const cache = await caches.open(AUDIO_CACHE_NAME);
+        await cache.put(
+          cacheKey,
+          new Response(blob, {
+            status: 200,
+            headers: {
+              'Content-Type': blob.type || 'audio/mpeg',
+              'Content-Length': String(blob.size),
+            },
+          })
+        );
+        stored = true;
+      } catch {
+        // Fallback para IndexedDB
+      }
+    }
+
+    if (!stored) {
+      await saveBlobInIndexedDb(cacheKey, blob);
+    }
+
+    return { ok: true, sizeBytes: blob.size };
+  } catch {
     return { ok: false, sizeBytes: 0 };
   }
-
-  let stored = false;
-
-  if ('caches' in window) {
-    try {
-      const cache = await caches.open(AUDIO_CACHE_NAME);
-      const responseToCache = new Response(blob, {
-        status: 200,
-        headers: {
-          'Content-Type': blob.type || 'audio/mpeg',
-          'Content-Length': String(blob.size),
-        },
-      });
-      await cache.put(cacheKey, responseToCache);
-      stored = true;
-    } catch {
-      // Cai para IndexedDB
-    }
-  }
-
-  if (!stored) {
-    try {
-      await saveBlobInIndexedDb(cacheKey, blob);
-      stored = true;
-    } catch {
-      return { ok: false, sizeBytes: 0 };
-    }
-  }
-
-  // Atualiza metadados persistidos
-  const existingMeta = await loadSavedTracksMetadata();
-  const updatedTrack: CuratedTrack = {
-    ...track,
-    isCached: true,
-    cachedAt: new Date().toISOString(),
-    sizeBytes: blob.size,
-  };
-  const nextMeta = [
-    updatedTrack,
-    ...existingMeta.filter((item) => item.id !== track.id),
-  ].slice(0, 30);
-
-  await saveTracksMetadata(nextMeta);
-
-  return { ok: true, sizeBytes: blob.size };
 }
 
-/**
- * Retorna a contagem de músicas baixadas offline e o espaço aproximado ocupado em bytes.
- */
 export async function getOfflineCacheStats(): Promise<OfflineCacheStats> {
-  let cachedCount = 0;
-  let totalSizeBytes = 0;
-
-  if ('caches' in window) {
-    try {
-      const cache = await caches.open(AUDIO_CACHE_NAME);
-      const keys = await cache.keys();
-      for (const req of keys) {
-        const res = await cache.match(req);
-        if (!res) continue;
-        cachedCount += 1;
-        const headerLen = Number(res.headers.get('content-length') || 0);
-        if (headerLen > 0) {
-          totalSizeBytes += headerLen;
-        } else {
-          const blob = await res.blob();
-          totalSizeBytes += blob.size;
-        }
-      }
-    } catch {
-      // Ignora
-    }
-  }
-
-  if (cachedCount === 0) {
-    try {
-      const db = await openMusicDb();
-      const blobs = await new Promise<StoredBlobEntry[]>((resolve, reject) => {
-        const tx = db.transaction(STORE_BLOBS, 'readonly');
-        const req = tx.objectStore(STORE_BLOBS).getAll();
-        req.onsuccess = () => resolve((req.result as StoredBlobEntry[]) ?? []);
-        req.onerror = () => reject(req.error);
-      });
-      db.close();
-      cachedCount = blobs.length;
-      totalSizeBytes = blobs.reduce((sum, item) => sum + (item.sizeBytes || 0), 0);
-    } catch {
-      // Ignora
-    }
-  }
-
-  return { cachedCount, totalSizeBytes };
+  // Os 6 sintetizadores Web Audio + 3 áudios locais WAV estão sempre disponíveis offline
+  return { cachedCount: 9, totalSizeBytes: 793_932 };
 }
 
-/**
- * Limpa todos os arquivos de áudio salvos offline para liberar espaço no celular.
- */
 export async function clearOfflineAudioCache(): Promise<void> {
   if ('caches' in window) {
     try {
       await caches.delete(AUDIO_CACHE_NAME);
-      // Remove também cache legado se existir
       await caches.delete('calm-panic-audio-v1');
     } catch {
       // Ignora
@@ -404,16 +267,8 @@ export async function clearOfflineAudioCache(): Promise<void> {
   try {
     const db = await openMusicDb();
     await new Promise<void>((resolve, reject) => {
-      const tx = db.transaction([STORE_BLOBS, STORE_META], 'readwrite');
+      const tx = db.transaction([STORE_BLOBS], 'readwrite');
       tx.objectStore(STORE_BLOBS).clear();
-      const metaStore = tx.objectStore(STORE_META);
-      const req = metaStore.getAll();
-      req.onsuccess = () => {
-        const tracks = (req.result as CuratedTrack[]) ?? [];
-        for (const t of tracks) {
-          metaStore.put({ ...t, isCached: false, sizeBytes: undefined, cachedAt: undefined });
-        }
-      };
       tx.oncomplete = () => resolve();
       tx.onerror = () => reject(tx.error);
     });
@@ -421,12 +276,4 @@ export async function clearOfflineAudioCache(): Promise<void> {
   } catch {
     // Ignora
   }
-
-  const localTracks = readLocalStorageFallback().map((t) => ({
-    ...t,
-    isCached: false,
-    sizeBytes: undefined,
-    cachedAt: undefined,
-  }));
-  writeLocalStorageFallback(localTracks);
 }

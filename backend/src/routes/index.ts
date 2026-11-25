@@ -16,5 +16,6 @@ router.use('/preferences', preferencesRouter);
 router.use('/bot', botRouter);
 router.use('/logs', panicLogRouter);
 router.use('/chat', chatRouter);
+router.use('/api/chat', chatRouter);
 
 export { router };

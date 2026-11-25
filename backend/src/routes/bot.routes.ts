@@ -11,9 +11,5 @@ botRouter.get('/tracks', authMiddleware, (req, res, next) =>
 botRouter.get('/search', authMiddleware, (req, res, next) =>
   botController.searchTracks(req, res, next)
 );
-// Aceita token via header Authorization ou ?token= para compatibilidade direta com <audio src>
-botRouter.get('/audio-proxy', (req, res, next) =>
-  botController.proxyAudio(req, res, next)
-);
 
 export { botRouter };

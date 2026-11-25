@@ -30,6 +30,14 @@ export interface CaptchaChallenge {
   expiresAt: number;
 }
 
+export type SynthPreset =
+  | 'rain'
+  | 'brown-noise'
+  | 'pink-noise'
+  | 'white-noise'
+  | 'ocean'
+  | 'zen-pad';
+
 export interface CuratedTrack {
   id: string;
   title: string;
@@ -42,7 +50,9 @@ export interface CuratedTrack {
   genre: string;
   moodTag: 'happy' | 'uplifting' | 'calming' | 'relaxing';
   licenseUrl?: string | null;
-  source?: 'jamendo' | 'local';
+  source?: 'synthesizer' | 'local';
+  synthPreset?: SynthPreset;
+  tags?: string[];
   isCached?: boolean;
   cachedAt?: string;
   sizeBytes?: number;

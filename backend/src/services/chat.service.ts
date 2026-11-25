@@ -412,11 +412,11 @@ export class ChatService {
       },
     });
 
-    // Busca contexto recente da conversa para resposta natural do amigo
+    // Busca as últimas 20 mensagens da conversa no PostgreSQL para manter o contexto completo no Gemini
     const recentHistory = await this.prisma.chatMessage.findMany({
       where: { userId },
       orderBy: { criadoEm: 'desc' },
-      take: 12,
+      take: 20,
     });
 
     const chronologicalHistory = recentHistory.reverse();
@@ -471,6 +471,67 @@ export class ChatService {
     }
 
     return { synced: syncedResults };
+  }
+
+  /**
+   * Limpa o histórico de conversas do usuário autenticado (isolado estritamente por userId)
+   * para começar um novo assunto do zero.
+   */
+  public async clearHistory(userId: string) {
+    const context = await this.getUserAndFriendContext(userId);
+
+    await this.prisma.$transaction([
+      this.prisma.chatMessage.deleteMany({ where: { userId } }),
+      this.prisma.chatSession.deleteMany({ where: { userId } }),
+    ]);
+
+    const freshWelcome = await this.prisma.chatMessage.create({
+      data: {
+        userId,
+        remetente: 'FRIEND',
+        tipo: 'TEXT',
+        conteudoTexto: `Prontinho, ${context.firstName}! Começamos uma conversa novinha em folha. Eu sou ${context.friendName} e estou aqui te ouvindo. Sobre o que você gostaria de conversar agora?`,
+        criseRelacionada: false,
+      },
+    });
+
+    return {
+      friendName: context.friendName,
+      message: freshWelcome,
+    };
+  }
+
+  /**
+   * Formata o histórico de mensagens do PostgreSQL no padrão estrito do Google Gemini
+   * ([{ role: 'user' | 'model', parts: [{ text }] }]), garantindo que:
+   * 1. O histórico sempre comece com role 'user' (remove boas-vindas iniciais 'model');
+   * 2. Turnos consecutivos do mesmo papel sejam mesclados para alternância estrita user <-> model.
+   */
+  private buildNormalizedGeminiHistory(
+    history: Array<{ remetente: ChatSender; conteudoTexto: string }>
+  ): Array<{ role: 'user' | 'model'; parts: Array<{ text: string }> }> {
+    const normalized: Array<{ role: 'user' | 'model'; parts: Array<{ text: string }> }> = [];
+
+    for (const item of history.slice(-20)) {
+      const text = item.conteudoTexto?.trim();
+      if (!text) continue;
+
+      const role: 'user' | 'model' = item.remetente === 'USER' ? 'user' : 'model';
+
+      // A API do Gemini exige que o primeiro turno do histórico seja 'user'
+      if (normalized.length === 0 && role === 'model') {
+        continue;
+      }
+
+      const last = normalized[normalized.length - 1];
+      if (last && last.role === role) {
+        last.parts[0].text = `${last.parts[0].text}\n${text}`;
+      } else {
+        normalized.push({ role, parts: [{ text }] });
+      }
+    }
+
+    return normalized;
   }
 
   private hasValidGeminiKey(): boolean {
@@ -530,10 +591,10 @@ export class ChatService {
           `5. Mantenha respostas empáticas e concisas (3 a 5 frases), fáceis de ler durante um momento de ansiedade.`,
         ].join('\n');
 
-        const geminiContents = history.slice(-10).map((item) => ({
-          role: item.remetente === 'USER' ? ('user' as const) : ('model' as const),
-          parts: [{ text: item.conteudoTexto }],
-        }));
+        const geminiContents = this.buildNormalizedGeminiHistory(history);
+        if (geminiContents.length === 0) {
+          geminiContents.push({ role: 'user', parts: [{ text: userMessageText }] });
+        }
 
         const modelName = env.GEMINI_MODEL?.trim() || 'gemini-2.5-flash';
         const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(

@@ -15,6 +15,10 @@ const chatMessageLimiter = createRateLimiter({
 chatRouter.use(authMiddleware);
 
 chatRouter.get('/history', (req, res, next) => chatController.getHistory(req, res, next));
+chatRouter.delete('/history', (req, res, next) => chatController.clearHistory(req, res, next));
+chatRouter.post('/', chatMessageLimiter, (req, res, next) =>
+  chatController.sendMessage(req, res, next)
+);
 chatRouter.post('/welcome', chatMessageLimiter, (req, res, next) =>
   chatController.createCrisisWelcome(req, res, next)
 );

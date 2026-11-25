@@ -7,6 +7,7 @@ import {
   Pencil,
   Send,
   Sparkles,
+  Trash2,
   Wifi,
   X,
 } from 'lucide-react';
@@ -63,6 +64,7 @@ export function FriendChatPanel({
   const [inputText, setInputText] = useState('');
   const [isLoadingHistory, setIsLoadingHistory] = useState(true);
   const [isSending, setIsSending] = useState(false);
+  const [isClearingHistory, setIsClearingHistory] = useState(false);
   const [isGeneratingPdf, setIsGeneratingPdf] = useState(false);
   const [isOnline, setIsOnline] = useState<boolean>(() => navigator.onLine);
   const [errorBanner, setErrorBanner] = useState<string | null>(null);
@@ -96,7 +98,7 @@ export function FriendChatPanel({
     };
   }, []);
 
-  // Carrega histórico inicial (online ou IndexedDB offline)
+  // Carrega histórico persistido no PostgreSQL (GET /api/chat/history) ou IndexedDB offline
   const loadConversation = useCallback(async () => {
     setIsLoadingHistory(true);
     setErrorBanner(null);
@@ -112,7 +114,7 @@ export function FriendChatPanel({
           id: `offline-welcome-${Date.now()}`,
           remetente: 'FRIEND',
           tipo: 'TEXT',
-          conteudoTexto: `Oi, ${firstName}! Eu sou ${friendName}. Mesmo sem internet agora, estou aqui com você. O que você está sentindo nesse momento? Vamos conversar.`,
+          conteudoTexto: `Oi, ${firstName}! Mesmo sem internet agora, estou aqui com você. O que você está sentindo nesse momento? Vamos conversar.`,
           criseRelacionada: isCrisisPopup,
           criadoEm: new Date().toISOString(),
         };
@@ -120,7 +122,6 @@ export function FriendChatPanel({
         await saveCachedMessages(userId, [offlineOpening]);
       }
       setIsLoadingHistory(false);
-      scrollToBottom();
       return;
     }
 
@@ -158,13 +159,57 @@ export function FriendChatPanel({
       }
     } finally {
       setIsLoadingHistory(false);
-      scrollToBottom();
     }
-  }, [firstName, friendName, isCrisisPopup, scrollToBottom, userId]);
+  }, [firstName, isCrisisPopup, userId]);
 
   useEffect(() => {
     void loadConversation();
   }, [loadConversation]);
+
+  // Scroll automático sempre que o histórico é carregado ou uma nova mensagem chega
+  useEffect(() => {
+    if (messages.length > 0) {
+      scrollToBottom();
+    }
+  }, [messages.length, scrollToBottom]);
+
+  const handleClearHistory = async () => {
+    if (isClearingHistory) return;
+    const confirmed = window.confirm(
+      'Deseja limpar o histórico desta conversa e começar um novo assunto do zero?'
+    );
+    if (!confirmed) return;
+
+    setIsClearingHistory(true);
+    setErrorBanner(null);
+
+    try {
+      await clearOfflineOutbox(userId);
+      if (navigator.onLine) {
+        const res = await api.clearChatHistory();
+        const freshList = [res.message];
+        setMessages(freshList);
+        await saveCachedMessages(userId, freshList);
+      } else {
+        const offlineReset: ChatMessage = {
+          id: `offline-reset-${Date.now()}`,
+          remetente: 'FRIEND',
+          tipo: 'TEXT',
+          conteudoTexto: `Prontinho, ${firstName}! Começamos uma conversa nova. O que você gostaria de conversar agora?`,
+          criseRelacionada: false,
+          criadoEm: new Date().toISOString(),
+        };
+        setMessages([offlineReset]);
+        await saveCachedMessages(userId, [offlineReset]);
+      }
+      setStatusToast('Conversa limpa! Novo assunto iniciado.');
+      window.setTimeout(() => setStatusToast(null), 3000);
+    } catch {
+      setErrorBanner('Não foi possível limpar o histórico agora. Tente novamente.');
+    } finally {
+      setIsClearingHistory(false);
+    }
+  };
 
   // Sincroniza fila offline (IndexedDB outbox) automaticamente quando a internet volta
   useEffect(() => {
@@ -469,6 +514,18 @@ export function FriendChatPanel({
 
           <div className="flex items-center gap-1.5">
             <ThemeToggleButton variant="headerDark" showLabel={false} />
+
+            <button
+              type="button"
+              onClick={() => void handleClearHistory()}
+              disabled={isClearingHistory}
+              title="Limpar histórico e começar um novo assunto"
+              aria-label="Limpar histórico da conversa"
+              className="inline-flex items-center gap-1 rounded-xl bg-white/15 px-2.5 py-2 text-xs font-semibold text-white transition hover:bg-rose-500/70 disabled:opacity-50"
+            >
+              <Trash2 className="h-4 w-4" />
+              <span className="hidden md:inline">Limpar</span>
+            </button>
 
             <button
               type="button"

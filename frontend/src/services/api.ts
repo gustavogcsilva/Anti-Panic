@@ -190,12 +190,17 @@ export const api = {
 
   getChatHistory: (options?: { crisis?: boolean }) =>
     request<{ friendName: string; messages: ChatMessage[] }>(
-      `/chat/history${options?.crisis ? '?crisis=true' : ''}`,
+      `/api/chat/history${options?.crisis ? '?crisis=true' : ''}`,
       { method: 'GET' }
     ),
 
+  clearChatHistory: () =>
+    request<{ friendName: string; message: ChatMessage }>('/api/chat/history', {
+      method: 'DELETE',
+    }),
+
   createCrisisWelcome: () =>
-    request<{ friendName: string; message: ChatMessage }>('/chat/welcome', {
+    request<{ friendName: string; message: ChatMessage }>('/api/chat/welcome', {
       method: 'POST',
     }),
 
@@ -210,7 +215,7 @@ export const api = {
       friendName: string;
       userMessage: ChatMessage;
       friendMessage: ChatMessage;
-    }>('/chat/message', {
+    }>('/api/chat', {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
@@ -226,11 +231,11 @@ export const api = {
   ) =>
     request<{
       synced: Array<{ userMessage: ChatMessage; friendMessage: ChatMessage }>;
-    }>('/chat/sync', {
+    }>('/api/chat/sync', {
       method: 'POST',
       body: JSON.stringify({ messages }),
     }),
 
   getChatReportData: () =>
-    request<{ report: ChatReportData }>('/chat/report-data', { method: 'GET' }),
+    request<{ report: ChatReportData }>('/api/chat/report-data', { method: 'GET' }),
 };

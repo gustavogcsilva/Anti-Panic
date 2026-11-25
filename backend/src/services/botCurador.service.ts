@@ -1,5 +1,12 @@
 import { PrismaClient } from '@prisma/client';
-import { env } from '../config/env';
+
+export type SynthPreset =
+  | 'rain'
+  | 'brown-noise'
+  | 'pink-noise'
+  | 'white-noise'
+  | 'ocean'
+  | 'zen-pad';
 
 export interface CuratedTrack {
   id: string;
@@ -13,88 +20,154 @@ export interface CuratedTrack {
   genre: string;
   moodTag: 'happy' | 'uplifting' | 'calming' | 'relaxing';
   licenseUrl: string | null;
-  source: 'jamendo' | 'local';
-}
-
-interface JamendoTrackResult {
-  id: string;
-  name: string;
-  artist_name: string;
-  duration: number;
-  audio: string;
-  audiodownload?: string;
-  audiodownload_allowed?: boolean;
-  image?: string;
-  album_image?: string;
-  license_ccurl?: string;
-  musicinfo?: {
-    tags?: {
-      genres?: string[];
-      vartags?: string[];
-    };
-  };
-}
-
-interface JamendoApiResponse {
-  headers: {
-    status: string;
-    code: number;
-    error_message: string;
-    results_count: number;
-  };
-  results: JamendoTrackResult[];
+  source: 'synthesizer' | 'local';
+  synthPreset?: SynthPreset;
+  tags: string[];
 }
 
 export class BotCuradorError extends Error {
   public readonly statusCode: number;
 
-  constructor(message: string, statusCode = 502) {
+  constructor(message: string, statusCode = 500) {
     super(message);
     this.name = 'BotCuradorError';
     this.statusCode = statusCode;
   }
 }
 
-const JAMENDO_API_URL = 'https://api.jamendo.com/v3.0/tracks/';
-const TARGET_TRACK_COUNT = 8;
-const JAMENDO_POOL_LIMIT = 20;
-const REQUEST_TIMEOUT_MS = 10_000;
-const MIN_DURATION_SECONDS = 45;
-const MAX_DURATION_SECONDS = 600;
-const PERSONALIZED_MOODS: Array<'happy' | 'uplifting' | 'calming' | 'relaxing'> = [
-  'calming',
-  'relaxing',
-  'uplifting',
-];
-const RELAXING_DEFAULT_TAGS = ['ambient relaxation', 'meditation relaxing', 'ambient calm'];
-
-const PT_TO_EN_MOOD_MAP: Record<string, string> = {
-  chuva: 'rain',
-  piano: 'piano',
-  meditacao: 'meditation',
-  meditar: 'meditation',
-  natureza: 'nature',
-  floresta: 'forest',
-  mar: 'ocean',
-  oceano: 'ocean',
-  sono: 'sleep',
-  dormir: 'sleep',
-  calma: 'calm',
-  calmo: 'calm',
-  relaxar: 'relaxation',
-  relaxante: 'relaxing',
-  ambiente: 'ambient',
-  paz: 'peaceful',
-  acustico: 'acoustic',
-  violao: 'acoustic',
-  instrumental: 'instrumental',
-  lofi: 'lofi',
-  'lo-fi': 'lofi',
-  foco: 'chillout',
-  ansiedade: 'meditation',
-};
-
-const FALLBACK_CURATED_TRACKS: CuratedTrack[] = [
+/**
+ * Catálogo estruturado 100% gratuito, sem CORS, sem expiração de token e 100% compatível
+ * com Safari iOS, Chrome Android e modo offline (PWA):
+ * - Paisagens sonoras sintetizadas em tempo real via Web Audio API (chuva, ruído marrom/rosa/branco, ondas, zen 432Hz)
+ * - Áudios locais em public/audio/ pré-cacheados pelo Service Worker
+ */
+export const RELAXING_AUDIO_CATALOG: CuratedTrack[] = [
+  {
+    id: 'synth-rain',
+    title: 'Chuva Suave na Janela',
+    artist: 'Paisagem Sonora • Web Audio',
+    audioUrl: 'synth://rain',
+    downloadUrl: 'synth://rain',
+    audioDownloadAllowed: true,
+    duration: 600,
+    coverUrl: null,
+    genre: 'natureza',
+    moodTag: 'calming',
+    licenseUrl: null,
+    source: 'synthesizer',
+    synthPreset: 'rain',
+    tags: ['chuva', 'rain', 'natureza', 'sono', 'calma', 'ambient', 'relaxante'],
+  },
+  {
+    id: 'synth-brown-noise',
+    title: 'Ruído Marrom Profundo (Alívio de Ansiedade)',
+    artist: 'Terapia Sonora • Web Audio',
+    audioUrl: 'synth://brown-noise',
+    downloadUrl: 'synth://brown-noise',
+    audioDownloadAllowed: true,
+    duration: 600,
+    coverUrl: null,
+    genre: 'ruído marrom',
+    moodTag: 'calming',
+    licenseUrl: null,
+    source: 'synthesizer',
+    synthPreset: 'brown-noise',
+    tags: ['ruido', 'marrom', 'brown', 'foco', 'ansiedade', 'sono', 'calma'],
+  },
+  {
+    id: 'synth-ocean',
+    title: 'Ondas do Mar (Ritmo 4-2-6)',
+    artist: 'Paisagem Sonora • Web Audio',
+    audioUrl: 'synth://ocean',
+    downloadUrl: 'synth://ocean',
+    audioDownloadAllowed: true,
+    duration: 600,
+    coverUrl: null,
+    genre: 'natureza',
+    moodTag: 'relaxing',
+    licenseUrl: null,
+    source: 'synthesizer',
+    synthPreset: 'ocean',
+    tags: ['mar', 'ondas', 'ocean', 'natureza', 'respiracao', 'praia', 'calma'],
+  },
+  {
+    id: 'local-piano-suave',
+    title: 'Piano Suave para Desacelerar',
+    artist: 'Respira Studio (Offline)',
+    audioUrl: '/audio/piano-suave.wav',
+    downloadUrl: '/audio/piano-suave.wav',
+    audioDownloadAllowed: true,
+    duration: 12,
+    coverUrl: null,
+    genre: 'piano',
+    moodTag: 'relaxing',
+    licenseUrl: null,
+    source: 'local',
+    tags: ['piano', 'classical', 'acoustic', 'acustico', 'instrumental', 'calma', 'melodia'],
+  },
+  {
+    id: 'synth-pink-noise',
+    title: 'Ruído Rosa Acolhedor (Sono & Foco)',
+    artist: 'Terapia Sonora • Web Audio',
+    audioUrl: 'synth://pink-noise',
+    downloadUrl: 'synth://pink-noise',
+    audioDownloadAllowed: true,
+    duration: 600,
+    coverUrl: null,
+    genre: 'ruído rosa',
+    moodTag: 'relaxing',
+    licenseUrl: null,
+    source: 'synthesizer',
+    synthPreset: 'pink-noise',
+    tags: ['ruido', 'rosa', 'pink', 'sono', 'dormir', 'foco', 'lofi'],
+  },
+  {
+    id: 'local-meditacao-noturna',
+    title: 'Meditação Noturna 432Hz',
+    artist: 'Respira Studio (Offline)',
+    audioUrl: '/audio/meditacao-noturna.wav',
+    downloadUrl: '/audio/meditacao-noturna.wav',
+    audioDownloadAllowed: true,
+    duration: 12,
+    coverUrl: null,
+    genre: 'meditação',
+    moodTag: 'calming',
+    licenseUrl: null,
+    source: 'local',
+    tags: ['meditacao', 'meditation', 'noite', 'sono', '432hz', 'ambient', 'paz'],
+  },
+  {
+    id: 'synth-zen-pad',
+    title: 'Acorde Zen Respiratório (Harmonia)',
+    artist: 'Paisagem Sonora • Web Audio',
+    audioUrl: 'synth://zen-pad',
+    downloadUrl: 'synth://zen-pad',
+    audioDownloadAllowed: true,
+    duration: 600,
+    coverUrl: null,
+    genre: 'meditação',
+    moodTag: 'uplifting',
+    licenseUrl: null,
+    source: 'synthesizer',
+    synthPreset: 'zen-pad',
+    tags: ['zen', 'meditacao', 'ambient', 'harmonia', 'paz', 'calma'],
+  },
+  {
+    id: 'synth-white-noise',
+    title: 'Ruído Branco Suave (Bloqueio de Barulhos)',
+    artist: 'Terapia Sonora • Web Audio',
+    audioUrl: 'synth://white-noise',
+    downloadUrl: 'synth://white-noise',
+    audioDownloadAllowed: true,
+    duration: 600,
+    coverUrl: null,
+    genre: 'ruído branco',
+    moodTag: 'calming',
+    licenseUrl: null,
+    source: 'synthesizer',
+    synthPreset: 'white-noise',
+    tags: ['ruido', 'branco', 'white', 'silencio', 'sono', 'foco'],
+  },
   {
     id: 'local-calm-1',
     title: 'Respiração Serena (Acorde Acolhedor)',
@@ -104,433 +177,85 @@ const FALLBACK_CURATED_TRACKS: CuratedTrack[] = [
     audioDownloadAllowed: true,
     duration: 12,
     coverUrl: null,
-    genre: 'ambient',
+    genre: 'ambiente',
     moodTag: 'calming',
-    licenseUrl: 'https://creativecommons.org/licenses/by/4.0/',
+    licenseUrl: null,
     source: 'local',
-  },
-  {
-    id: 'local-calm-2',
-    title: 'Harmonia para Desacelerar (Modo Local)',
-    artist: 'Respira Studio (Offline)',
-    audioUrl: '/audio/fallback-calm.wav',
-    downloadUrl: '/audio/fallback-calm.wav',
-    audioDownloadAllowed: true,
-    duration: 12,
-    coverUrl: null,
-    genre: 'relaxation',
-    moodTag: 'relaxing',
-    licenseUrl: 'https://creativecommons.org/licenses/by/4.0/',
-    source: 'local',
+    tags: ['ambiente', 'ambient', 'calma', 'respiracao', 'emergencia', 'offline'],
   },
 ];
 
 export class BotCuradorService {
-  private readonly prisma: PrismaClient;
-  private readonly jamendoClientId: string;
+  constructor(private readonly prisma: PrismaClient) {}
 
-  constructor(prisma: PrismaClient, jamendoClientId = env.JAMENDO_CLIENT_ID) {
-    this.prisma = prisma;
-    this.jamendoClientId = jamendoClientId.trim();
-  }
-
-  public hasValidJamendoKey(): boolean {
-    return (
-      Boolean(this.jamendoClientId) &&
-      this.jamendoClientId !== 'seu-client-id-jamendo' &&
-      this.jamendoClientId.length >= 6
-    );
-  }
-
-  /**
-   * Lê as preferências musicais do usuário (gêneros, artistas ou modoAleatorio),
-   * consulta a API gratuita do Jamendo (faixas instrumentais/relaxantes) e retorna
-   * URLs diretas de streaming (track.audio) e download (track.audiodownload).
-   */
   public async getCuratedTracksForUser(userId: string): Promise<CuratedTrack[]> {
-    if (!this.hasValidJamendoKey()) {
-      console.warn(
-        '[BotCuradorService] JAMENDO_CLIENT_ID não configurado no backend. Usando faixas locais de fallback.'
-      );
-      return [...FALLBACK_CURATED_TRACKS];
-    }
-
     const preferences = await this.prisma.userPreferences.findUnique({
       where: { userId },
       select: {
         generosMusicais: true,
-        artistasPreferidos: true,
         modoAleatorio: true,
       },
     });
 
-    const genres = this.normalizeList(preferences?.generosMusicais);
-    const artists = this.normalizeList(preferences?.artistasPreferidos);
-    const useRandomMode =
-      Boolean(preferences?.modoAleatorio) || (genres.length === 0 && artists.length === 0);
+    const userGenres = (preferences?.generosMusicais ?? []).map((g) => this.normalize(g));
 
-    const queryPromises: Array<Promise<CuratedTrack[]>> = [];
-
-    const randomOffset = Math.floor(Math.random() * 40);
-
-    if (useRandomMode) {
-      // Busca faixas instrumentais e relaxantes no Jamendo com offset aleatório para variedade
-      queryPromises.push(
-        this.fetchFromJamendoWithFallbackOffset({
-          fuzzytags: 'ambient relaxation meditation',
-          moodTag: 'calming',
-          instrumental: true,
-          offset: randomOffset,
-        })
-      );
-      for (const tagCombo of this.shuffleArray(RELAXING_DEFAULT_TAGS).slice(0, 2)) {
-        queryPromises.push(
-          this.fetchFromJamendoWithFallbackOffset({
-            fuzzytags: tagCombo,
-            moodTag: 'relaxing',
-            offset: Math.floor(Math.random() * 30),
-          })
-        );
-      }
-    } else {
-      // 1. Consulta pelos gêneros favoritos combinados com humor calmante/relaxante
-      for (const genre of this.shuffleArray(genres).slice(0, 3)) {
-        const moodTag = this.pickRandom(PERSONALIZED_MOODS);
-        const mappedGenre = this.translateSearchTerm(genre);
-        queryPromises.push(
-          this.fetchFromJamendoWithFallbackOffset({
-            fuzzytags: `${mappedGenre} ${moodTag}`.trim(),
-            genreLabel: genre,
-            moodTag,
-            offset: Math.floor(Math.random() * 25),
-          })
-        );
-      }
-
-      // 2. Consulta pelos artistas preferidos do usuário
-      for (const artist of this.shuffleArray(artists).slice(0, 2)) {
-        queryPromises.push(
-          this.fetchFromJamendoWithFallbackOffset({
-            search: artist,
-            moodTag: 'uplifting',
-            offset: 0,
-          })
-        );
-      }
-
-      // 3. Sempre inclui uma consulta relaxante/ambient para garantir catálogo rico
-      queryPromises.push(
-        this.fetchFromJamendoWithFallbackOffset({
-          fuzzytags: 'ambient relaxation meditation',
-          moodTag: 'calming',
-          offset: randomOffset,
-        })
-      );
+    if (preferences?.modoAleatorio || userGenres.length === 0) {
+      return this.shuffleArray(RELAXING_AUDIO_CATALOG);
     }
 
-    const settledResults = await Promise.allSettled(queryPromises);
-    const trackMap = new Map<string, CuratedTrack>();
-
-    for (const result of settledResults) {
-      if (result.status === 'fulfilled') {
-        for (const track of result.value) {
-          if (!trackMap.has(track.id)) {
-            trackMap.set(track.id, track);
-          }
-        }
-      }
-    }
-
-    // Fallback secundário no Jamendo com mp31 e tag ampla (offset=0) caso a primeira consulta retorne poucas faixas
-    if (trackMap.size < 4) {
-      try {
-        const broadTracks = await this.fetchFromJamendo({
-          fuzzytags: 'ambient relaxing',
-          moodTag: 'relaxing',
-          audioFormat: 'mp31',
-          offset: 0,
-        });
-        for (const track of broadTracks) {
-          if (!trackMap.has(track.id)) {
-            trackMap.set(track.id, track);
-          }
-        }
-      } catch {
-        // Ignora e segue para fallback local se necessário
-      }
-    }
-
-    const curatedPool = Array.from(trackMap.values());
-    if (curatedPool.length === 0) {
-      return [...FALLBACK_CURATED_TRACKS];
-    }
-
-    return this.shuffleArray(curatedPool).slice(0, TARGET_TRACK_COUNT);
-  }
-
-  /**
-   * Busca faixas relaxantes na API do Jamendo por termo/humor (ex: "chuva", "piano", "meditação", "natureza").
-   */
-  public async searchRelaxingTracks(rawQuery: string, limit = 10): Promise<CuratedTrack[]> {
-    const cleanedQuery = rawQuery.trim().slice(0, 80);
-    if (!this.hasValidJamendoKey()) {
-      console.warn(
-        '[BotCuradorService] JAMENDO_CLIENT_ID não configurado no backend. Usando faixas locais de fallback.'
-      );
-      return [...FALLBACK_CURATED_TRACKS];
-    }
-
-    const translated = this.translateSearchTerm(cleanedQuery);
-    const safeLimit = Math.min(Math.max(limit, 1), 20);
-
-    const queryPromises: Array<Promise<CuratedTrack[]>> = [];
-
-    const randomOffset = Math.floor(Math.random() * 30);
-
-    if (translated) {
-      // 1. Busca por tags combinadas (espaço gera '+' correto no URLSearchParams, sem double-encode %2B)
-      queryPromises.push(
-        this.fetchFromJamendoWithFallbackOffset({
-          fuzzytags: `${translated} relaxing`,
-          moodTag: 'relaxing',
-          genreLabel: cleanedQuery,
-          limit: safeLimit,
-          offset: randomOffset,
-        })
-      );
-      // 2. Busca por nome/termo livre
-      queryPromises.push(
-        this.fetchFromJamendoWithFallbackOffset({
-          search: translated,
-          moodTag: 'calming',
-          genreLabel: cleanedQuery,
-          limit: safeLimit,
-          offset: Math.floor(Math.random() * 15),
-        })
-      );
-    } else {
-      queryPromises.push(
-        this.fetchFromJamendoWithFallbackOffset({
-          fuzzytags: 'ambient relaxation meditation',
-          moodTag: 'calming',
-          limit: safeLimit,
-          offset: randomOffset,
-        })
-      );
-    }
-
-    const settled = await Promise.allSettled(queryPromises);
-    const trackMap = new Map<string, CuratedTrack>();
-
-    for (const res of settled) {
-      if (res.status === 'fulfilled') {
-        for (const track of res.value) {
-          if (!trackMap.has(track.id)) {
-            trackMap.set(track.id, track);
-          }
-        }
-      }
-    }
-
-    // Se a busca específica não achou nada, faz fallback para tags instrumentais relaxantes no Jamendo (offset=0)
-    if (trackMap.size === 0) {
-      try {
-        const fallbackJamendo = await this.fetchFromJamendo({
-          fuzzytags: 'ambient relaxation meditation',
-          moodTag: 'calming',
-          limit: safeLimit,
-          offset: 0,
-        });
-        for (const track of fallbackJamendo) {
-          trackMap.set(track.id, track);
-        }
-      } catch {
-        // Retorna fallback local abaixo
-      }
-    }
-
-    const list = Array.from(trackMap.values());
-    if (list.length === 0) {
-      return [...FALLBACK_CURATED_TRACKS];
-    }
-
-    return this.shuffleArray(list).slice(0, safeLimit);
-  }
-
-  private async fetchFromJamendoWithFallbackOffset(params: {
-    tags?: string;
-    fuzzytags?: string;
-    search?: string;
-    genreLabel?: string;
-    moodTag: 'happy' | 'uplifting' | 'calming' | 'relaxing';
-    instrumental?: boolean;
-    audioFormat?: 'mp32' | 'mp31';
-    limit?: number;
-    offset?: number;
-  }): Promise<CuratedTrack[]> {
-    const firstTry = await this.fetchFromJamendo(params);
-    if (firstTry.length > 0 || !params.offset) {
-      return firstTry;
-    }
-    return this.fetchFromJamendo({ ...params, offset: 0 });
-  }
-
-  private async fetchFromJamendo(params: {
-    tags?: string;
-    fuzzytags?: string;
-    search?: string;
-    genreLabel?: string;
-    moodTag: 'happy' | 'uplifting' | 'calming' | 'relaxing';
-    instrumental?: boolean;
-    audioFormat?: 'mp32' | 'mp31';
-    limit?: number;
-    offset?: number;
-  }): Promise<CuratedTrack[]> {
-    const {
-      tags,
-      fuzzytags,
-      search,
-      genreLabel,
-      moodTag,
-      instrumental = false,
-      audioFormat = 'mp32',
-      limit = JAMENDO_POOL_LIMIT,
-      offset = 0,
-    } = params;
-
-    const searchParams = new URLSearchParams({
-      client_id: this.jamendoClientId,
-      format: 'json',
-      limit: String(limit),
-      offset: String(Math.max(0, offset)),
-      audioformat: audioFormat,
-      audiodlformat: audioFormat,
-      include: 'musicinfo',
-      order: 'popularity_total',
-      groupby: 'artist_id',
+    // Prioriza faixas que combinam com as preferências musicais do usuário mantendo o catálogo completo
+    const prioritized = [...RELAXING_AUDIO_CATALOG].sort((a, b) => {
+      const scoreA = this.computePreferenceScore(a, userGenres);
+      const scoreB = this.computePreferenceScore(b, userGenres);
+      return scoreB - scoreA;
     });
 
-    if (instrumental) {
-      searchParams.set('vocalinstrumental', 'instrumental');
-    }
-
-    if (search) {
-      searchParams.set('search', search);
-    } else if (tags) {
-      searchParams.set('tags', tags);
-    } else if (fuzzytags) {
-      searchParams.set('fuzzytags', fuzzytags);
-    } else {
-      searchParams.set('fuzzytags', 'ambient relaxation meditation');
-    }
-
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
-
-    try {
-      const response = await fetch(`${JAMENDO_API_URL}?${searchParams.toString()}`, {
-        method: 'GET',
-        headers: { Accept: 'application/json' },
-        signal: controller.signal,
-      });
-
-      if (!response.ok) {
-        throw new BotCuradorError(
-          `Jamendo API respondeu com status HTTP ${response.status}.`,
-          502
-        );
-      }
-
-      const payload = (await response.json()) as JamendoApiResponse;
-
-      if (payload.headers?.status !== 'success') {
-        throw new BotCuradorError(
-          payload.headers?.error_message || 'Erro retornado pela Jamendo API.',
-          502
-        );
-      }
-
-      return (payload.results ?? [])
-        .filter((track) => this.isValidTrack(track))
-        .map((track): CuratedTrack => {
-          const streamUrl = track.audio.trim();
-          const downloadUrl =
-            track.audiodownload && track.audiodownload.startsWith('https://')
-              ? track.audiodownload.trim()
-              : streamUrl;
-
-          return {
-            id: String(track.id),
-            title: track.name.trim(),
-            artist: track.artist_name.trim(),
-            audioUrl: streamUrl,
-            downloadUrl,
-            audioDownloadAllowed: Boolean(track.audiodownload_allowed ?? true),
-            duration: track.duration,
-            coverUrl: track.image || track.album_image || null,
-            genre: genreLabel ?? track.musicinfo?.tags?.genres?.[0] ?? moodTag,
-            moodTag,
-            licenseUrl: track.license_ccurl || null,
-            source: 'jamendo',
-          };
-        });
-    } catch (error) {
-      if (error instanceof BotCuradorError) {
-        throw error;
-      }
-
-      if (error instanceof Error && error.name === 'AbortError') {
-        throw new BotCuradorError('Tempo limite excedido ao consultar a Jamendo API.', 504);
-      }
-
-      throw new BotCuradorError(
-        `Falha de comunicação com a Jamendo API: ${error instanceof Error ? error.message : 'erro desconhecido'}`,
-        502
-      );
-    } finally {
-      clearTimeout(timeoutId);
-    }
+    return prioritized;
   }
 
-  private translateSearchTerm(raw: string): string {
-    const normalized = raw
+  public async searchRelaxingTracks(rawQuery: string, limit = 10): Promise<CuratedTrack[]> {
+    const normalizedQuery = this.normalize(rawQuery);
+    const safeLimit = Math.min(Math.max(limit, 1), RELAXING_AUDIO_CATALOG.length);
+
+    if (!normalizedQuery) {
+      return this.shuffleArray(RELAXING_AUDIO_CATALOG).slice(0, safeLimit);
+    }
+
+    const terms = normalizedQuery.split(/\s+/).filter(Boolean);
+
+    const matches = RELAXING_AUDIO_CATALOG.filter((track) => {
+      const searchable = this.normalize(
+        `${track.title} ${track.artist} ${track.genre} ${track.tags.join(' ')}`
+      );
+      return terms.some((term) => searchable.includes(term));
+    });
+
+    if (matches.length === 0) {
+      return this.shuffleArray(RELAXING_AUDIO_CATALOG).slice(0, safeLimit);
+    }
+
+    const remaining = RELAXING_AUDIO_CATALOG.filter(
+      (t) => !matches.some((m) => m.id === t.id)
+    );
+
+    return [...matches, ...this.shuffleArray(remaining)].slice(0, safeLimit);
+  }
+
+  private computePreferenceScore(track: CuratedTrack, normalizedGenres: string[]): number {
+    const searchable = this.normalize(`${track.genre} ${track.tags.join(' ')}`);
+    let score = 0;
+    for (const g of normalizedGenres) {
+      if (searchable.includes(g)) score += 2;
+    }
+    return score + Math.random() * 0.5;
+  }
+
+  private normalize(raw: string): string {
+    return raw
       .normalize('NFD')
       .replace(/[\u0300-\u036f]/g, '')
       .toLowerCase()
       .trim();
-
-    if (!normalized) return '';
-
-    const words = normalized.split(/\s+/).filter(Boolean);
-    const mapped = words.map((w) => PT_TO_EN_MOOD_MAP[w] ?? w.replace(/[^a-z0-9-]/g, ''));
-    return mapped.filter(Boolean).join(' ');
-  }
-
-  private isValidTrack(track: JamendoTrackResult): boolean {
-    if (!track.audio || !track.audio.startsWith('https://')) {
-      return false;
-    }
-
-    if (
-      typeof track.duration !== 'number' ||
-      track.duration < MIN_DURATION_SECONDS ||
-      track.duration > MAX_DURATION_SECONDS
-    ) {
-      return false;
-    }
-
-    return Boolean(track.id && track.name && track.artist_name);
-  }
-
-  private normalizeList(items?: string[] | null): string[] {
-    if (!items || items.length === 0) return [];
-    return Array.from(
-      new Set(items.map((item) => item.trim()).filter((item) => item.length > 0))
-    );
-  }
-
-  private pickRandom<T>(items: T[]): T {
-    return items[Math.floor(Math.random() * items.length)];
   }
 
   private shuffleArray<T>(items: T[]): T[] {

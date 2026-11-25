@@ -27,11 +27,11 @@ interface RelaxingMusicPlayerProps {
 
 const MOOD_SEARCH_CHIPS = [
   { label: 'Chuva', query: 'chuva' },
+  { label: 'Ruído Marrom', query: 'marrom' },
+  { label: 'Ondas do Mar', query: 'ondas' },
   { label: 'Piano', query: 'piano' },
   { label: 'Meditação', query: 'meditação' },
-  { label: 'Natureza', query: 'natureza' },
-  { label: 'Sono', query: 'sono' },
-  { label: 'Ambiente', query: 'ambiente' },
+  { label: 'Ruído Rosa', query: 'rosa' },
 ];
 
 function formatDuration(seconds: number): string {
@@ -281,7 +281,7 @@ export function RelaxingMusicPlayer({ variant = 'full' }: RelaxingMusicPlayerPro
             type="button"
             disabled={isLoadingTracks}
             onClick={() => void discoverNewTrack()}
-            title="Sortear e tocar uma nova música online do Jamendo"
+            title="Sortear e tocar outro som relaxante"
             aria-label="Nova Música"
             className={`inline-flex h-10 items-center gap-1.5 rounded-full px-3 text-xs font-semibold transition active:scale-95 disabled:opacity-50 ${
               isCrisisStyle
@@ -378,19 +378,14 @@ export function RelaxingMusicPlayer({ variant = 'full' }: RelaxingMusicPlayerPro
                 type="text"
                 value={searchInput}
                 onChange={(e) => setSearchInput(e.target.value)}
-                disabled={!isOnline}
-                placeholder={
-                  isOnline
-                    ? 'Buscar músicas relaxantes (chuva, piano, meditação...)'
-                    : 'Modo offline — reproduzindo músicas salvas'
-                }
-                className="w-full rounded-2xl border border-slate-200 bg-slate-50/80 py-2 pl-9 pr-3 text-xs text-slate-800 outline-none focus:border-calm-500 focus:bg-white disabled:opacity-60"
+                placeholder="Buscar som relaxante (chuva, ruído marrom, ondas, piano...)"
+                className="w-full rounded-2xl border border-slate-200 bg-slate-50/80 py-2 pl-9 pr-3 text-xs text-slate-800 outline-none focus:border-calm-500 focus:bg-white"
               />
             </div>
 
             <button
               type="submit"
-              disabled={!isOnline || isLoadingTracks}
+              disabled={isLoadingTracks}
               className="inline-flex shrink-0 items-center gap-1 rounded-2xl bg-calm-600 px-3.5 py-2 text-xs font-semibold text-white transition hover:bg-calm-700 disabled:opacity-50"
             >
               {isLoadingTracks ? (
@@ -408,7 +403,7 @@ export function RelaxingMusicPlayer({ variant = 'full' }: RelaxingMusicPlayerPro
               <button
                 key={chip.query}
                 type="button"
-                disabled={!isOnline || isLoadingTracks}
+                disabled={isLoadingTracks}
                 onClick={() => void handleMoodClick(chip.query)}
                 className={`rounded-full px-3 py-1 text-[11px] font-semibold transition disabled:opacity-50 ${
                   activeSearchQuery.toLowerCase() === chip.query

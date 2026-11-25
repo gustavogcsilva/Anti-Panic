@@ -236,6 +236,32 @@ async function runSuite() {
     );
     console.log('  ✔ Relatório estruturado com indicação de gatilhos e plano prático validado.');
 
+    console.log('▶ [FUNCIONAL 9/10] Catálogo relaxante sem Jamendo (Web Audio + WAVs locais)...');
+    const tracksRes = await requestJson(baseUrl, '/bot/tracks', { token: tokenA });
+    assert.strictEqual(tracksRes.status, 200);
+    assert.ok(Array.isArray(tracksRes.data.tracks) && tracksRes.data.tracks.length >= 6);
+    const rainSearchRes = await requestJson(baseUrl, '/bot/search?q=chuva', { token: tokenA });
+    assert.strictEqual(rainSearchRes.status, 200);
+    assert.strictEqual(rainSearchRes.data.tracks[0].synthPreset, 'rain');
+    console.log('  ✔ Catálogo de paisagens sonoras (Web Audio API + áudios locais) validado.');
+
+    console.log('▶ [FUNCIONAL 10/10] Persistência (/api/chat/history) e limpeza (DELETE /api/chat/history)...');
+    const apiHistoryRes = await requestJson(baseUrl, '/api/chat/history', { token: tokenA });
+    assert.strictEqual(apiHistoryRes.status, 200);
+    assert.ok(apiHistoryRes.data.messages.length >= 4, 'Deve recuperar o histórico persistido em ordem cronológica');
+
+    const clearRes = await requestJson(baseUrl, '/api/chat/history', {
+      method: 'DELETE',
+      token: tokenA,
+    });
+    assert.strictEqual(clearRes.status, 200);
+    assert.strictEqual(clearRes.data.message.remetente, 'FRIEND');
+
+    const afterClearRes = await requestJson(baseUrl, '/api/chat/history', { token: tokenA });
+    assert.strictEqual(afterClearRes.status, 200);
+    assert.strictEqual(afterClearRes.data.messages.length, 1, 'Após DELETE deve restar apenas a nova mensagem de boas-vindas');
+    console.log('  ✔ Recuperação de histórico e limpeza via DELETE /api/chat/history validadas.');
+
     // =========================================================================
     // 2. TESTES DE VULNERABILIDADE E SEGURANÇA
     // =========================================================================

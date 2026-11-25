@@ -90,4 +90,17 @@ export class ChatController {
       next(error);
     }
   }
+
+  public async clearHistory(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      if (!req.user) {
+        throw new AppError('Usuário não autenticado.', 401);
+      }
+
+      const result = await chatService.clearHistory(req.user.id);
+      res.status(200).json(result);
+    } catch (error) {
+      next(error);
+    }
+  }
 }
