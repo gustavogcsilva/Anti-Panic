@@ -42,6 +42,7 @@ export interface CuratedTrack {
   id: string;
   title: string;
   artist: string;
+  album?: string | null;
   audioUrl: string;
   downloadUrl?: string;
   audioDownloadAllowed?: boolean;
@@ -50,12 +51,31 @@ export interface CuratedTrack {
   genre: string;
   moodTag: 'happy' | 'uplifting' | 'calming' | 'relaxing';
   licenseUrl?: string | null;
-  source?: 'synthesizer' | 'local';
+  source?: 'deezer' | 'itunes' | 'synthesizer' | 'local';
   synthPreset?: SynthPreset;
   tags?: string[];
   isCached?: boolean;
   cachedAt?: string;
   sizeBytes?: number;
+}
+
+export interface RandomArtistTrackResponse {
+  id: string;
+  title: string;
+  artist: string;
+  album: string;
+  cover: string | null;
+  audioUrl: string;
+  source: 'deezer' | 'itunes' | 'local';
+  duration: number;
+}
+
+export interface ChatTokenUsage {
+  usedToday: number;
+  dailyLimit: number;
+  percentUsed: number;
+  isNearLimit: boolean;
+  isExhausted: boolean;
 }
 
 export type ChatSender = 'USER' | 'FRIEND';

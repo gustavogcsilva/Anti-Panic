@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { authRouter } from './auth.routes';
 import { botRouter } from './bot.routes';
 import { chatRouter } from './chat.routes';
+import { musicRouter } from './music.routes';
 import { panicLogRouter } from './panicLog.routes';
 import { preferencesRouter } from './preferences.routes';
 
@@ -14,6 +15,7 @@ router.get('/health', (_req, res) => {
 router.use('/auth', authRouter);
 router.use('/preferences', preferencesRouter);
 router.use('/bot', botRouter);
+router.use('/api/music', musicRouter);
 router.use('/logs', panicLogRouter);
 router.use('/chat', chatRouter);
 router.use('/api/chat', chatRouter);

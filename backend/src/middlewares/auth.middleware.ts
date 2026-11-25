@@ -19,6 +19,7 @@ export function authMiddleware(req: Request, _res: Response, next: NextFunction)
 
   try {
     const payload = verifyAuthToken(token);
+    req.userId = payload.sub;
     req.user = {
       id: payload.sub,
       email: payload.email,

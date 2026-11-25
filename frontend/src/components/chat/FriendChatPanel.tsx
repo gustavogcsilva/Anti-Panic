@@ -1,4 +1,5 @@
 import {
+  AlertTriangle,
   Check,
   Clock,
   CloudOff,
@@ -68,6 +69,7 @@ export function FriendChatPanel({
   const [isGeneratingPdf, setIsGeneratingPdf] = useState(false);
   const [isOnline, setIsOnline] = useState<boolean>(() => navigator.onLine);
   const [errorBanner, setErrorBanner] = useState<string | null>(null);
+  const [tokenWarning, setTokenWarning] = useState<string | null>(null);
   const [statusToast, setStatusToast] = useState<string | null>(null);
 
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
@@ -130,6 +132,7 @@ export function FriendChatPanel({
       let nextMessages = historyResp.messages;
       setFriendName(historyResp.friendName || 'Amigo');
       setDraftFriendName(historyResp.friendName || 'Amigo');
+      setTokenWarning(historyResp.tokenWarning ?? null);
 
       if (isCrisisPopup) {
         try {
@@ -176,7 +179,7 @@ export function FriendChatPanel({
   const handleClearHistory = async () => {
     if (isClearingHistory) return;
     const confirmed = window.confirm(
-      'Deseja limpar o histórico desta conversa e começar um novo assunto do zero?'
+      'Deseja apagar toda a conversa e começar um assunto completamente novo do zero?'
     );
     if (!confirmed) return;
 
@@ -186,26 +189,15 @@ export function FriendChatPanel({
     try {
       await clearOfflineOutbox(userId);
       if (navigator.onLine) {
-        const res = await api.clearChatHistory();
-        const freshList = [res.message];
-        setMessages(freshList);
-        await saveCachedMessages(userId, freshList);
-      } else {
-        const offlineReset: ChatMessage = {
-          id: `offline-reset-${Date.now()}`,
-          remetente: 'FRIEND',
-          tipo: 'TEXT',
-          conteudoTexto: `Prontinho, ${firstName}! Começamos uma conversa nova. O que você gostaria de conversar agora?`,
-          criseRelacionada: false,
-          criadoEm: new Date().toISOString(),
-        };
-        setMessages([offlineReset]);
-        await saveCachedMessages(userId, [offlineReset]);
+        await api.clearChatHistory();
       }
-      setStatusToast('Conversa limpa! Novo assunto iniciado.');
-      window.setTimeout(() => setStatusToast(null), 3000);
+      setMessages([]);
+      setTokenWarning(null);
+      await saveCachedMessages(userId, []);
+      setStatusToast('Conversa apagada! Pode começar um novo assunto do zero.');
+      window.setTimeout(() => setStatusToast(null), 3500);
     } catch {
-      setErrorBanner('Não foi possível limpar o histórico agora. Tente novamente.');
+      setErrorBanner('Não foi possível apagar a conversa agora. Tente novamente.');
     } finally {
       setIsClearingHistory(false);
     }
@@ -360,6 +352,7 @@ export function FriendChatPanel({
         response.friendMessage,
       ];
       setMessages(updatedOnline);
+      setTokenWarning(response.tokenWarning ?? null);
       await saveCachedMessages(userId, updatedOnline);
       scrollToBottom();
     } catch {
@@ -519,12 +512,12 @@ export function FriendChatPanel({
               type="button"
               onClick={() => void handleClearHistory()}
               disabled={isClearingHistory}
-              title="Limpar histórico e começar um novo assunto"
-              aria-label="Limpar histórico da conversa"
-              className="inline-flex items-center gap-1 rounded-xl bg-white/15 px-2.5 py-2 text-xs font-semibold text-white transition hover:bg-rose-500/70 disabled:opacity-50"
+              title="Apagar conversa e começar um novo assunto do zero"
+              aria-label="Apagar conversa"
+              className="inline-flex items-center gap-1 rounded-xl bg-white/15 px-2.5 py-2 text-xs font-semibold text-white transition hover:bg-rose-500/80 disabled:opacity-50"
             >
               <Trash2 className="h-4 w-4" />
-              <span className="hidden md:inline">Limpar</span>
+              <span className="hidden md:inline">Apagar conversa</span>
             </button>
 
             <button
@@ -603,7 +596,17 @@ export function FriendChatPanel({
         )}
       </header>
 
-      {/* Notificações rápidas */}
+      {/* Notificações rápidas e Aviso Discreto de Tokens Diários */}
+      {tokenWarning && (
+        <div
+          role="status"
+          className="flex items-center justify-center gap-2 border-b border-amber-200 bg-amber-50 px-4 py-2 text-xs font-medium text-amber-800 dark:border-amber-800 dark:bg-amber-950/70 dark:text-amber-200"
+        >
+          <AlertTriangle className="h-4 w-4 shrink-0" />
+          <span>{tokenWarning}</span>
+        </div>
+      )}
+
       {statusToast && (
         <div className="bg-emerald-50 px-4 py-2 text-center text-xs font-semibold text-emerald-800">
           {statusToast}
@@ -621,6 +624,16 @@ export function FriendChatPanel({
         {isLoadingHistory ? (
           <div className="flex h-40 items-center justify-center text-xs text-slate-500">
             Preparando espaço de conversa com {friendName}...
+          </div>
+        ) : messages.length === 0 ? (
+          <div className="flex h-48 flex-col items-center justify-center gap-2 px-6 text-center text-xs text-slate-500">
+            <HeartHandshake className="h-8 w-8 text-calm-500" />
+            <p className="font-semibold text-slate-700">
+              Nova conversa com {friendName}
+            </p>
+            <p>
+              Escreva abaixo ou grave um áudio no microfone para começar um novo assunto do zero.
+            </p>
           </div>
         ) : (
           messages.map((msg) => {

@@ -8,6 +8,7 @@ import {
   useState,
   type ReactNode,
 } from 'react';
+import { api } from '../services/api';
 import {
   cacheTrackOffline,
   clearOfflineAudioCache,
@@ -35,7 +36,9 @@ interface MusicPlayerContextValue {
   tracks: CuratedTrack[];
   currentTrack: CuratedTrack;
   currentIndex: number;
+  selectedArtist: string;
   isPlaying: boolean;
+  isLooping: boolean;
   isLoadingTracks: boolean;
   isBuffering: boolean;
   downloadingTrackId: string | null;
@@ -48,7 +51,11 @@ interface MusicPlayerContextValue {
   isOnline: boolean;
   cacheStats: OfflineCacheStats;
   activeSearchQuery: string;
+  setSelectedArtist: (artist: string) => void;
+  toggleLoop: () => void;
   playTrack: (track?: CuratedTrack) => Promise<void>;
+  playRandomByArtist: (artistOverride?: string) => Promise<void>;
+  playNextRandomSameArtist: () => Promise<void>;
   togglePlayPause: () => Promise<void>;
   pause: () => void;
   stop: () => void;
@@ -79,7 +86,9 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
 
   const [tracks, setTracks] = useState<CuratedTrack[]>(DEFAULT_RELAXING_CATALOG);
   const [currentIndex, setCurrentIndex] = useState(0);
+  const [selectedArtist, setSelectedArtist] = useState('');
   const [isPlaying, setIsPlaying] = useState(false);
+  const [isLooping, setIsLooping] = useState(true);
   const [isLoadingTracks, setIsLoadingTracks] = useState(false);
   const [isBuffering, setIsBuffering] = useState(false);
   const [downloadingTrackId, setDownloadingTrackId] = useState<string | null>(null);
@@ -102,8 +111,11 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
   const synthTimerRef = useRef<number | null>(null);
   const tracksRef = useRef<CuratedTrack[]>(DEFAULT_RELAXING_CATALOG);
   const currentTrackRef = useRef<CuratedTrack>(LOCAL_FALLBACK_TRACK);
+  const selectedArtistRef = useRef('');
+  const isLoopingRef = useRef(true);
   const volumeRef = useRef(0.85);
   const isMutedRef = useRef(false);
+  const errorRetryCountRef = useRef(0);
 
   const safeIndex = tracks.length > 0 ? currentIndex % tracks.length : 0;
   const currentTrack = tracks[safeIndex] ?? LOCAL_FALLBACK_TRACK;
@@ -115,6 +127,17 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     currentTrackRef.current = currentTrack;
   }, [currentTrack]);
+
+  useEffect(() => {
+    selectedArtistRef.current = selectedArtist;
+  }, [selectedArtist]);
+
+  useEffect(() => {
+    isLoopingRef.current = isLooping;
+    if (audioRef.current) {
+      audioRef.current.loop = isLooping;
+    }
+  }, [isLooping]);
 
   const stopSynthTimer = useCallback(() => {
     if (synthTimerRef.current !== null) {
@@ -133,13 +156,13 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
     [stopSynthTimer]
   );
 
-  // Instância única e persistente de <audio> com crossOrigin="anonymous" e playsInline para iOS Safari
+  // Instância única de <audio> com crossOrigin="anonymous", loop e playsInline (iOS Safari)
   const getAudioElement = useCallback((): HTMLAudioElement => {
     if (!audioRef.current) {
       const audio = new Audio();
       audio.crossOrigin = 'anonymous';
       audio.preload = 'auto';
-      audio.loop = true;
+      audio.loop = isLoopingRef.current;
       audio.volume = volumeRef.current;
       audio.muted = isMutedRef.current;
       (audio as HTMLAudioElement & { playsInline?: boolean }).playsInline = true;
@@ -168,12 +191,6 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
     [refreshCacheStats]
   );
 
-  /**
-   * Reproduz uma faixa:
-   * - Se for paisagem sonora Web Audio API (synth://...), inicia o sintetizador instantaneamente (0ms, offline).
-   * - Se for arquivo de áudio (local WAV em public/audio/ ou blob em cache), reproduz via <audio crossOrigin="anonymous">.
-   * - Caso o elemento <audio> falhe (onError / bloqueio), cai automaticamente para o sintetizador de chuva suave!
-   */
   const playTrackInternal = useCallback(
     async (explicitTrack?: CuratedTrack, customTrackList?: CuratedTrack[]): Promise<void> => {
       const activeList =
@@ -186,14 +203,14 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
       }
       currentTrackRef.current = targetTrack;
       setCurrentTime(0);
-      setDuration(targetTrack.duration || 600);
+      setDuration(targetTrack.duration || 30);
       setAudioError(null);
       setIsBuffering(true);
 
       const audio = getAudioElement();
       const synthPreset = extractSynthPreset(targetTrack);
 
-      // 1. Paisagem Sonora em tempo real via Web Audio API (Chuva, Ruído Marrom/Rosa/Branco, Ondas, Zen)
+      // 1. Paisagem Sonora em tempo real via Web Audio API
       if (synthPreset) {
         try {
           audio.pause();
@@ -201,6 +218,7 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
           setPlaybackStatus('offline');
           setIsPlaying(true);
           setIsBuffering(false);
+          errorRetryCountRef.current = 0;
           startSynthTimer(targetTrack.duration || 600);
           return;
         } catch {
@@ -211,26 +229,30 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
         }
       }
 
-      // 2. Arquivo de Áudio via HTML5 <audio crossOrigin="anonymous">
+      // 2. Arquivo de Áudio (Deezer / iTunes / Local WAV / Blob Offline) via <audio crossOrigin="anonymous">
       webAudioSynthesizer.stop();
       stopSynthTimer();
 
-      const resolvedUrl =
-        (await getOfflineTrackObjectUrl(targetTrack)) ??
-        targetTrack.audioUrl ??
-        LOCAL_FALLBACK_AUDIO_URL;
+      const offlineUrl = await getOfflineTrackObjectUrl(targetTrack);
+      const isExternalStream =
+        !offlineUrl &&
+        (targetTrack.source === 'deezer' ||
+          targetTrack.source === 'itunes' ||
+          targetTrack.audioUrl.startsWith('https://'));
+
+      const resolvedUrl = offlineUrl ?? targetTrack.audioUrl ?? LOCAL_FALLBACK_AUDIO_URL;
 
       try {
         audio.pause();
         audio.crossOrigin = 'anonymous';
         audio.src = resolvedUrl;
-        audio.loop = true;
+        audio.loop = isLoopingRef.current;
         audio.volume = volumeRef.current;
         audio.muted = isMutedRef.current;
         audio.currentTime = 0;
         audio.load();
 
-        setPlaybackStatus('offline');
+        setPlaybackStatus(isExternalStream ? 'online' : 'offline');
         const playPromise = audio.play();
         if (playPromise !== undefined) {
           await playPromise;
@@ -238,14 +260,18 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
 
         setIsPlaying(true);
         setIsBuffering(false);
+        errorRetryCountRef.current = 0;
       } catch {
-        // Fallback automático e instantâneo para o sintetizador de chuva (Web Audio API)
+        // Fallback automático sem travar o player
         try {
           await webAudioSynthesizer.start('rain', volumeRef.current, isMutedRef.current);
           setPlaybackStatus('offline');
           setIsPlaying(true);
           setIsBuffering(false);
           startSynthTimer(600);
+          setAudioError(
+            'Não foi possível tocar a prévia externa agora. Ativamos o som de chuva suave offline.'
+          );
         } catch {
           setIsBuffering(false);
           setIsPlaying(false);
@@ -264,6 +290,87 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
     [playTrackInternal]
   );
 
+  /**
+   * Etapa 2: Sorteia uma música aleatória por cantor via GET /api/music/random?artist=...
+   * (Deezer API -> Fallback iTunes -> Fallback local seguro).
+   */
+  const playRandomByArtist = useCallback(
+    async (artistOverride?: string) => {
+      const targetArtist = (artistOverride ?? selectedArtistRef.current).trim();
+      if (artistOverride !== undefined) {
+        setSelectedArtist(targetArtist);
+        selectedArtistRef.current = targetArtist;
+      }
+
+      setAudioError(null);
+
+      if (!navigator.onLine) {
+        setAudioError(
+          'Você está offline. Reproduzindo uma paisagem sonora relaxante salva no dispositivo.'
+        );
+        await playTrackInternal(DEFAULT_RELAXING_CATALOG[0], DEFAULT_RELAXING_CATALOG);
+        return;
+      }
+
+      setIsLoadingTracks(true);
+      setPlaybackStatus('loading');
+
+      try {
+        const randomRes = await api.getRandomTrackByArtist(targetArtist || undefined);
+
+        const newTrack: CuratedTrack = {
+          id: randomRes.id,
+          title: randomRes.title,
+          artist: randomRes.artist,
+          album: randomRes.album,
+          coverUrl: randomRes.cover,
+          audioUrl: randomRes.audioUrl,
+          downloadUrl: randomRes.audioUrl,
+          duration: randomRes.duration || 30,
+          genre: randomRes.source === 'local' ? 'piano' : randomRes.source,
+          moodTag: 'relaxing',
+          source: randomRes.source,
+          isCached: randomRes.source === 'local',
+        };
+
+        // Mantém o artista sorteado para o botão "Próxima Aleatória" do mesmo cantor
+        if (!targetArtist && randomRes.artist) {
+          setSelectedArtist(randomRes.artist);
+          selectedArtistRef.current = randomRes.artist;
+        }
+
+        const updatedList = [
+          newTrack,
+          ...tracksRef.current.filter((t) => t.id !== newTrack.id),
+        ].slice(0, 15);
+
+        tracksRef.current = updatedList;
+        setTracks(updatedList);
+        setCurrentIndex(0);
+        currentTrackRef.current = newTrack;
+
+        await playTrackInternal(newTrack, updatedList);
+      } catch {
+        setAudioError(
+          'Não foi possível sortear uma música online agora. Reproduzindo som relaxante local.'
+        );
+        await playTrackInternal(DEFAULT_RELAXING_CATALOG[0], DEFAULT_RELAXING_CATALOG);
+      } finally {
+        setIsLoadingTracks(false);
+      }
+    },
+    [playTrackInternal]
+  );
+
+  const playNextRandomSameArtist = useCallback(async () => {
+    const artistToUse =
+      selectedArtistRef.current.trim() ||
+      (currentTrackRef.current.source === 'deezer' || currentTrackRef.current.source === 'itunes'
+        ? currentTrackRef.current.artist
+        : '');
+    await playRandomByArtist(artistToUse);
+  }, [playRandomByArtist]);
+
   const refreshTracks = useCallback(async () => {
     setIsLoadingTracks(true);
     setAudioError(null);
@@ -271,7 +378,11 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
     try {
       const saved = await loadSavedTracksMetadata();
       const validSaved = saved.filter(
-        (t) => t.source === 'synthesizer' || t.source === 'local'
+        (t) =>
+          t.source === 'synthesizer' ||
+          t.source === 'local' ||
+          t.source === 'deezer' ||
+          t.source === 'itunes'
       );
       if (validSaved.length > 0) {
         tracksRef.current = validSaved;
@@ -323,7 +434,10 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
   );
 
   const discoverNewTrack = useCallback(async () => {
-    setAudioError(null);
+    if (navigator.onLine) {
+      await playRandomByArtist(selectedArtistRef.current);
+      return;
+    }
     const list = tracksRef.current.length > 0 ? tracksRef.current : DEFAULT_RELAXING_CATALOG;
     const currentId = currentTrackRef.current.id;
     const candidates = list.filter((t) => t.id !== currentId);
@@ -331,9 +445,12 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
       candidates.length > 0
         ? candidates[Math.floor(Math.random() * candidates.length)]
         : list[0];
-
     await playTrackInternal(picked, list);
-  }, [playTrackInternal]);
+  }, [playRandomByArtist, playTrackInternal]);
+
+  const toggleLoop = useCallback(() => {
+    setIsLooping((prev) => !prev);
+  }, []);
 
   const pause = useCallback(() => {
     if (audioRef.current) {
@@ -431,7 +548,7 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
     await refreshCacheStats();
   }, [refreshCacheStats]);
 
-  // Liga eventos nativos do <audio> (incluindo tratamento de onError)
+  // Liga eventos nativos do <audio> incluindo onError com sorteio automático de outra faixa
   useEffect(() => {
     const audio = getAudioElement();
 
@@ -459,11 +576,20 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
       }
     };
     const handleError = () => {
-      if (!webAudioSynthesizer.isRunning()) {
-        setIsBuffering(false);
+      if (webAudioSynthesizer.isRunning()) return;
+      setIsBuffering(false);
+
+      // Tenta sortear automaticamente outra música sem travar o player (máximo 2 tentativas)
+      if (navigator.onLine && errorRetryCountRef.current < 2) {
+        errorRetryCountRef.current += 1;
+        setAudioError('Prévia indisponível. Sorteando automaticamente outra música...');
+        void playRandomByArtist(selectedArtistRef.current);
+      } else {
+        errorRetryCountRef.current = 0;
         setAudioError(
-          'Não foi possível reproduzir o arquivo de áudio. Selecione outra paisagem sonora ou toque em Nova Música.'
+          'Faixa externa indisponível no momento. Ativando som relaxante offline.'
         );
+        void playTrackInternal(DEFAULT_RELAXING_CATALOG[0], DEFAULT_RELAXING_CATALOG);
       }
     };
 
@@ -484,7 +610,7 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
       audio.removeEventListener('pause', handlePause);
       audio.removeEventListener('error', handleError);
     };
-  }, [getAudioElement]);
+  }, [getAudioElement, playRandomByArtist, playTrackInternal]);
 
   useEffect(() => {
     const handleOnline = () => {
@@ -519,7 +645,9 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
       tracks,
       currentTrack,
       currentIndex: safeIndex,
+      selectedArtist,
       isPlaying,
+      isLooping,
       isLoadingTracks,
       isBuffering,
       downloadingTrackId,
@@ -532,7 +660,11 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
       isOnline,
       cacheStats,
       activeSearchQuery,
+      setSelectedArtist,
+      toggleLoop,
       playTrack,
+      playRandomByArtist,
+      playNextRandomSameArtist,
       togglePlayPause,
       pause,
       stop,
@@ -551,7 +683,9 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
       tracks,
       currentTrack,
       safeIndex,
+      selectedArtist,
       isPlaying,
+      isLooping,
       isLoadingTracks,
       isBuffering,
       downloadingTrackId,
@@ -564,7 +698,10 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
       isOnline,
       cacheStats,
       activeSearchQuery,
+      toggleLoop,
       playTrack,
+      playRandomByArtist,
+      playNextRandomSameArtist,
       togglePlayPause,
       pause,
       stop,

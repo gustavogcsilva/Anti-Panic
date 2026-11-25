@@ -18,6 +18,7 @@ const envSchema = z.object({
   EMAIL_FROM: z.string().default('Respira PWA <onboarding@resend.dev>'),
   GEMINI_API_KEY: z.string().optional().default(''),
   GEMINI_MODEL: z.string().default('gemini-2.5-flash'),
+  DAILY_CHAT_TOKEN_LIMIT: z.coerce.number().int().min(500).default(12000),
 });
 
 const parsed = envSchema.safeParse(process.env);

@@ -236,31 +236,38 @@ async function runSuite() {
     );
     console.log('  ✔ Relatório estruturado com indicação de gatilhos e plano prático validado.');
 
-    console.log('▶ [FUNCIONAL 9/10] Catálogo relaxante sem Jamendo (Web Audio + WAVs locais)...');
+    console.log('▶ [FUNCIONAL 9/10] Player por cantor (GET /api/music/random) + catálogo offline...');
+    const randomMusicRes = await requestJson(
+      baseUrl,
+      '/api/music/random?artist=Ludovico%20Einaudi'
+    );
+    assert.strictEqual(randomMusicRes.status, 200);
+    assert.ok(randomMusicRes.data.title && randomMusicRes.data.audioUrl);
+    assert.ok(['deezer', 'itunes', 'local'].includes(randomMusicRes.data.source));
+
     const tracksRes = await requestJson(baseUrl, '/bot/tracks', { token: tokenA });
     assert.strictEqual(tracksRes.status, 200);
     assert.ok(Array.isArray(tracksRes.data.tracks) && tracksRes.data.tracks.length >= 6);
-    const rainSearchRes = await requestJson(baseUrl, '/bot/search?q=chuva', { token: tokenA });
-    assert.strictEqual(rainSearchRes.status, 200);
-    assert.strictEqual(rainSearchRes.data.tracks[0].synthPreset, 'rain');
-    console.log('  ✔ Catálogo de paisagens sonoras (Web Audio API + áudios locais) validado.');
+    console.log('  ✔ Endpoint GET /api/music/random (Deezer/iTunes/fallback) e catálogo offline validados.');
 
-    console.log('▶ [FUNCIONAL 10/10] Persistência (/api/chat/history) e limpeza (DELETE /api/chat/history)...');
+    console.log('▶ [FUNCIONAL 10/10] Persistência (/api/chat/history), tokens e reset total (DELETE /api/chat/history)...');
     const apiHistoryRes = await requestJson(baseUrl, '/api/chat/history', { token: tokenA });
     assert.strictEqual(apiHistoryRes.status, 200);
     assert.ok(apiHistoryRes.data.messages.length >= 4, 'Deve recuperar o histórico persistido em ordem cronológica');
+    assert.ok(apiHistoryRes.data.tokenUsage?.dailyLimit > 0, 'Deve retornar estatística de tokens diários');
 
     const clearRes = await requestJson(baseUrl, '/api/chat/history', {
       method: 'DELETE',
       token: tokenA,
     });
     assert.strictEqual(clearRes.status, 200);
-    assert.strictEqual(clearRes.data.message.remetente, 'FRIEND');
+    assert.strictEqual(clearRes.data.cleared, true);
 
-    const afterClearRes = await requestJson(baseUrl, '/api/chat/history', { token: tokenA });
-    assert.strictEqual(afterClearRes.status, 200);
-    assert.strictEqual(afterClearRes.data.messages.length, 1, 'Após DELETE deve restar apenas a nova mensagem de boas-vindas');
-    console.log('  ✔ Recuperação de histórico e limpeza via DELETE /api/chat/history validadas.');
+    const afterClearCount = await prisma.chatMessage.count({
+      where: { userId: regRes.data.user.id },
+    });
+    assert.strictEqual(afterClearCount, 0, 'Após DELETE /api/chat/history o banco deve estar zerado para este userId');
+    console.log('  ✔ Recuperação de histórico, controle de tokens e reset total validados.');
 
     // =========================================================================
     // 2. TESTES DE VULNERABILIDADE E SEGURANÇA

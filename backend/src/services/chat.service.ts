@@ -50,6 +50,14 @@ export interface PracticalCareSuggestions {
   caminhadas: string[];
 }
 
+export interface ChatTokenUsage {
+  usedToday: number;
+  dailyLimit: number;
+  percentUsed: number;
+  isNearLimit: boolean;
+  isExhausted: boolean;
+}
+
 export interface ChatReportData {
   generatedAt: string;
   userName: string;
@@ -288,6 +296,74 @@ export class ChatService {
     };
   }
 
+  public async calculateDailyTokenUsage(userId: string): Promise<{
+    tokenUsage: ChatTokenUsage;
+    tokenWarning: string | null;
+  }> {
+    const startOfDay = new Date();
+    startOfDay.setHours(0, 0, 0, 0);
+
+    const todaysMessages = await this.prisma.chatMessage.findMany({
+      where: {
+        userId,
+        criadoEm: { gte: startOfDay },
+      },
+      select: { conteudoTexto: true },
+    });
+
+    const usedToday = todaysMessages.reduce(
+      (sum, msg) => sum + Math.max(1, Math.ceil((msg.conteudoTexto?.length ?? 0) / 4)),
+      0
+    );
+
+    const dailyLimit = env.DAILY_CHAT_TOKEN_LIMIT;
+    const percentUsed = Math.min(100, Math.round((usedToday / dailyLimit) * 100));
+    const isExhausted = usedToday >= dailyLimit;
+    const isNearLimit = !isExhausted && percentUsed >= 80;
+
+    let tokenWarning: string | null = null;
+    if (isExhausted) {
+      tokenWarning =
+        'Você atingiu o limite diário de tokens da conversa com a IA. Seguimos com orientações práticas de apoio imediato.';
+    } else if (isNearLimit) {
+      tokenWarning = `Aviso: você já utilizou ${percentUsed}% dos seus tokens diários de conversa. Aproveite para concluir os pontos mais importantes de hoje.`;
+    }
+
+    return {
+      tokenUsage: {
+        usedToday,
+        dailyLimit,
+        percentUsed,
+        isNearLimit,
+        isExhausted,
+      },
+      tokenWarning,
+    };
+  }
+
+  private buildUnavailableConciseFallback(params: {
+    firstName: string;
+    emergencyContactName: string | null;
+    reason: 'quota' | 'unavailable';
+  }): string {
+    const { firstName, emergencyContactName, reason } = params;
+    const intro =
+      reason === 'quota'
+        ? `${firstName}, o limite diário de tokens do assistente de IA foi atingido no momento.`
+        : `${firstName}, o serviço de IA está temporariamente indisponível no momento.`;
+
+    const trustedHint = emergencyContactName
+      ? `fale com ${emergencyContactName} ou alguém de confiança`
+      : 'fale com alguém de confiança (família ou amigo)';
+
+    return [
+      `${intro} Você não está sozinho(a) — tente agora estas 3 ações práticas:`,
+      `• Respiração: inspire por 4s, segure por 4s e expire devagar por 6s por alguns ciclos.`,
+      `• Aterramento rápido: observe 3 coisas que você vê ao redor e perceba 2 sons próximos.`,
+      `• Apoio humano: ${trustedHint}, ou ligue gratuitamente para o CVV (188) ou 192/190 em emergência.`,
+    ].join('\n');
+  }
+
   public async getHistory(userId: string, options?: { isCrisisPopup?: boolean }) {
     const context = await this.getUserAndFriendContext(userId);
 
@@ -316,9 +392,13 @@ export class ChatService {
       messages = [created];
     }
 
+    const { tokenUsage, tokenWarning } = await this.calculateDailyTokenUsage(userId);
+
     return {
       friendName: context.friendName,
       messages,
+      tokenUsage,
+      tokenWarning,
     };
   }
 
@@ -400,6 +480,18 @@ export class ChatService {
         ? Math.min(Math.round(input.audioDuration), 600)
         : null;
 
+    // 1. Antes de salvar a nova mensagem, recupera as últimas 20 mensagens anteriores (memória contínua)
+    const previousHistoryDesc = await this.prisma.chatMessage.findMany({
+      where: { userId },
+      orderBy: { criadoEm: 'desc' },
+      take: 20,
+    });
+    const previousHistoryAsc = previousHistoryDesc.reverse();
+
+    // 2. Verifica cota diária de tokens antes de chamar a IA
+    const preUsage = await this.calculateDailyTokenUsage(userId);
+
+    // 3. Salva a nova mensagem do usuário no PostgreSQL
     const userMessage = await this.prisma.chatMessage.create({
       data: {
         userId,
@@ -412,33 +504,47 @@ export class ChatService {
       },
     });
 
-    // Busca as últimas 20 mensagens da conversa no PostgreSQL para manter o contexto completo no Gemini
-    const recentHistory = await this.prisma.chatMessage.findMany({
-      where: { userId },
-      orderBy: { criadoEm: 'desc' },
-      take: 20,
-    });
-
-    const chronologicalHistory = recentHistory.reverse();
-
-    const replyText = await this.generateFriendReply({
-      firstName: context.firstName,
-      friendName: context.friendName,
-      emergencyContactName: context.emergencyContactName,
-      generosMusicais: context.generosMusicais,
-      artistasPreferidos: context.artistasPreferidos,
-      userMessageText: effectiveUserText,
-      isAudio: input.tipo === 'AUDIO',
-      hasTranscription: Boolean(
-        rawText && rawText !== '[Mensagem de voz enviada — desabafo em áudio]'
-      ),
-      isCrisis: Boolean(input.criseRelacionada),
-      history: chronologicalHistory.map((m) => ({
+    const fullChronologicalHistory = [
+      ...previousHistoryAsc.map((m) => ({
         remetente: m.remetente as ChatSender,
         conteudoTexto: m.conteudoTexto,
       })),
-    });
+      {
+        remetente: 'USER' as ChatSender,
+        conteudoTexto: effectiveUserText,
+      },
+    ];
 
+    let replyText: string;
+    let aiUnavailable = false;
+
+    if (preUsage.tokenUsage.isExhausted) {
+      aiUnavailable = true;
+      replyText = this.buildUnavailableConciseFallback({
+        firstName: context.firstName,
+        emergencyContactName: context.emergencyContactName,
+        reason: 'quota',
+      });
+    } else {
+      const replyResult = await this.generateFriendReply({
+        firstName: context.firstName,
+        friendName: context.friendName,
+        emergencyContactName: context.emergencyContactName,
+        generosMusicais: context.generosMusicais,
+        artistasPreferidos: context.artistasPreferidos,
+        userMessageText: effectiveUserText,
+        isAudio: input.tipo === 'AUDIO',
+        hasTranscription: Boolean(
+          rawText && rawText !== '[Mensagem de voz enviada — desabafo em áudio]'
+        ),
+        isCrisis: Boolean(input.criseRelacionada),
+        history: fullChronologicalHistory,
+      });
+      replyText = replyResult.text;
+      aiUnavailable = replyResult.aiUnavailable;
+    }
+
+    // 4. Salva a resposta do assistente ('FRIEND' / model) no PostgreSQL antes de devolver ao front-end
     const friendMessage = await this.prisma.chatMessage.create({
       data: {
         userId,
@@ -449,10 +555,15 @@ export class ChatService {
       },
     });
 
+    const postUsage = await this.calculateDailyTokenUsage(userId);
+
     return {
       friendName: context.friendName,
       userMessage,
       friendMessage,
+      tokenUsage: postUsage.tokenUsage,
+      tokenWarning: postUsage.tokenWarning,
+      aiUnavailable,
     };
   }
 
@@ -474,8 +585,8 @@ export class ChatService {
   }
 
   /**
-   * Limpa o histórico de conversas do usuário autenticado (isolado estritamente por userId)
-   * para começar um novo assunto do zero.
+   * Limpa todas as mensagens do usuário autenticado (deleteMany({ where: { userId } }))
+   * para começar uma conversa completamente do zero, sem resquícios do assunto anterior.
    */
   public async clearHistory(userId: string) {
     const context = await this.getUserAndFriendContext(userId);
@@ -485,19 +596,9 @@ export class ChatService {
       this.prisma.chatSession.deleteMany({ where: { userId } }),
     ]);
 
-    const freshWelcome = await this.prisma.chatMessage.create({
-      data: {
-        userId,
-        remetente: 'FRIEND',
-        tipo: 'TEXT',
-        conteudoTexto: `Prontinho, ${context.firstName}! Começamos uma conversa novinha em folha. Eu sou ${context.friendName} e estou aqui te ouvindo. Sobre o que você gostaria de conversar agora?`,
-        criseRelacionada: false,
-      },
-    });
-
     return {
       friendName: context.friendName,
-      message: freshWelcome,
+      cleared: true,
     };
   }
 
@@ -554,7 +655,7 @@ export class ChatService {
     hasTranscription: boolean;
     isCrisis: boolean;
     history: Array<{ remetente: ChatSender; conteudoTexto: string }>;
-  }): Promise<string> {
+  }): Promise<{ text: string; aiUnavailable: boolean }> {
     const {
       firstName,
       friendName,
@@ -568,6 +669,9 @@ export class ChatService {
       history,
     } = params;
 
+    let geminiFailedWithQuotaOrOutage = false;
+    let failureReason: 'quota' | 'unavailable' = 'unavailable';
+
     if (this.hasValidGeminiKey()) {
       try {
         const musicPrefHint =
@@ -576,7 +680,8 @@ export class ChatService {
             : `Preferências musicais de ${firstName}: músicas calmantes, lo-fi e acústicas.`;
 
         const systemInstructionText = [
-          `Você é ${friendName}, um amigo próximo, caloroso, humano e profundamente empático conversando com ${firstName} no app Respira (um refúgio de apoio emocional para momentos de ansiedade, pânico e tristeza).`,
+          `Você é ${friendName}, um amigo próximo, caloroso, humano e profundamente empático conversando com ${firstName} no app Anti-Panic / Respira (um refúgio de apoio emocional para momentos de ansiedade, pânico e tristeza).`,
+          `MEMÓRIA CONTÍNUA DA CONVERSA: Use SEMPRE todo o histórico recuperado acima como memória contínua da conversa. Lembre-se do que ${firstName} já relatou anteriormente, dê continuidade natural ao assunto sem perguntar novamente o que já foi dito e demonstre que você realmente acompanhou a conversa.`,
           musicPrefHint,
           `REGRAS ESSENCIAIS DE TOM, ACOLHIMENTO E SUGESTÕES PRÁTICAS:`,
           `1. Nunca fale como um robô, agente virtual frio ou médico dando laudo. Fale de amigo para amigo, em português brasileiro natural, acolhedor e verdadeiro, validando o que ${firstName} sente sem julgamentos.`,
@@ -585,7 +690,7 @@ export class ChatService {
           `   - FILMES (leves e confortantes, sem gatilhos pesados, ex: Soul, Divertida Mente, Meu Amigo Totoro, Amélie Poulain);`,
           `   - LIVROS (leituras curtas, acolhedoras ou imersivas, ex: "O Menino, a Toupeira, a Raposa e o Cavalo", "As Coisas que Você Só Vê Quando Desacelera");`,
           `   - MÚSICAS (alinhadas ao gosto de ${firstName} ou sons relaxantes do app);`,
-          `   - EXERCÍCIOS (respiração 4-2-6, alongamento de ombros/pescoço, grounding 5-4-3-2-1 ou formas seguras de descarregar tensão como gritar num travesseiro ou sacudir as mãos);`,
+          `   - EXERCÍCIOS (respiração 4-4-6 / 4-2-6, alongamento de ombros/pescoço, grounding 5-4-3-2-1 ou formas seguras de descarregar tensão);`,
           `   - CAMINHADAS (dar uma volta curta sem pressa, tomar ar fresco, observar as árvores e cores ao redor).`,
           `4. Se detectar qualquer risco à própria vida ou automutilação, acolha com extremo carinho e lembre gentilmente que o CVV (188) funciona 24h gratuitamente${emergencyContactName ? ` e que ${emergencyContactName} também está nos contatos de confiança` : ''}.`,
           `5. Mantenha respostas empáticas e concisas (3 a 5 frases), fáceis de ler durante um momento de ansiedade.`,
@@ -636,28 +741,55 @@ export class ChatService {
             .join('')
             .trim();
           if (geminiReply) {
-            return this.ensurePracticalSuggestionsCoverage(geminiReply, {
-              firstName,
-              generosMusicais,
-              artistasPreferidos,
-              userMessageText,
-              isCrisis,
-            });
+            return {
+              text: this.ensurePracticalSuggestionsCoverage(geminiReply, {
+                firstName,
+                generosMusicais,
+                artistasPreferidos,
+                userMessageText,
+                isCrisis,
+              }),
+              aiUnavailable: false,
+            };
           }
         } else {
-          const isQuotaLimit = response.status === 429;
+          geminiFailedWithQuotaOrOutage = true;
+          failureReason = response.status === 429 ? 'quota' : 'unavailable';
           console.warn(
             `[ChatService] Gemini API respondeu status ${response.status}${
-              isQuotaLimit ? ' (Limite de cota da camada gratuita atingido)' : ''
-            }. Ativando fallback empático local sem interrupção.`
+              response.status === 429 ? ' (Limite de cota atingido)' : ''
+            }. Ativando fallback acolhedor local.`
           );
         }
       } catch (err) {
+        geminiFailedWithQuotaOrOutage = true;
+        failureReason = 'unavailable';
         console.warn(
-          '[ChatService] Falha ou timeout de conexão com Gemini API. Ativando fallback empático local:',
+          '[ChatService] Falha ou timeout na Gemini API. Ativando fallback acolhedor:',
           err instanceof Error ? err.message : err
         );
       }
+    }
+
+    // Se a API do Gemini falhou por cota (429) ou indisponibilidade (503/erro), entrega
+    // orientações concisas e práticas (respiração 4-4-6, aterramento 3-2 e CVV 188 / apoio humano)
+    // combinadas com as sugestões práticas quando o usuário estiver pedindo sugestões
+    if (geminiFailedWithQuotaOrOutage) {
+      const conciseCrisisFallback = this.buildUnavailableConciseFallback({
+        firstName,
+        emergencyContactName,
+        reason: failureReason,
+      });
+      return {
+        text: this.ensurePracticalSuggestionsCoverage(conciseCrisisFallback, {
+          firstName,
+          generosMusicais,
+          artistasPreferidos,
+          userMessageText,
+          isCrisis,
+        }),
+        aiUnavailable: true,
+      };
     }
 
     const fallbackReply = this.generateEmpatheticFallbackReply({
@@ -672,13 +804,16 @@ export class ChatService {
       isCrisis,
     });
 
-    return this.ensurePracticalSuggestionsCoverage(fallbackReply, {
-      firstName,
-      generosMusicais,
-      artistasPreferidos,
-      userMessageText,
-      isCrisis,
-    });
+    return {
+      text: this.ensurePracticalSuggestionsCoverage(fallbackReply, {
+        firstName,
+        generosMusicais,
+        artistasPreferidos,
+        userMessageText,
+        isCrisis,
+      }),
+      aiUnavailable: false,
+    };
   }
 
   /**

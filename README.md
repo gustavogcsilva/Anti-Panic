@@ -41,7 +41,7 @@ Mesmo se o usuário estiver em um local sem cobertura de internet, em modo aviã
 ### 🚨 1. Botão de Pânico Sensorial ("PRECISO DE CALMA")
 - **Vibração Tátil Calmante:** Dispara sequências hápticas rítmicas (`navigator.vibrate`) para ancoragem física.
 - **Respiração Guiada 4-2-6:** Guia visual com transição suave (inspire 4s, segure 2s, solte 6s) para estabilização cardiorrespiratória.
-- **Refúgio Sonoro Offline-First:** Pré-carrega 5 faixas musicais acolhedoras no `CacheStorage` do navegador (via Service Worker / Workbox e integração opcional com a Jamendo API).
+- **Refúgio Sonoro Offline-First:** Sorteio de músicas por cantor via Deezer/iTunes API + paisagens sonoras sintetizadas via Web Audio API e áudios locais precacheados no PWA.
 - **Acesso Imediato a Suporte:** Botão com ligação direta para o **CVV (188)** e para o contato de emergência configurado pelo usuário.
 - **Pop-up de Conversa Imediata:** Botão destacado na tela de crise que abre um diálogo de acolhimento sem interromper a música ou a respiração.
 
@@ -194,7 +194,7 @@ CAPTCHA_SECRET="outro-segredo-hmac-para-o-captcha-32-chars"
 FRONTEND_URL="http://localhost:5173"
 GEMINI_API_KEY="" # Opcional: pegue grátis em https://aistudio.google.com/app/apikey
 GEMINI_MODEL="gemini-2.5-flash"
-JAMENDO_CLIENT_ID="" # Opcional: pegue grátis em https://developer.jamendo.com/
+DAILY_CHAT_TOKEN_LIMIT=12000
 ```
 
 Sincronize as tabelas no banco de dados e inicie o backend:
@@ -269,7 +269,7 @@ O projeto foi especificamente arquitetado para rodar com **custo zero** utilizan
 | **Backend API** | [Render](https://render.com/) (Web Service Free) | Root Directory: `backend` • Build: `npm install && npm run build` • Start: `npm run start` |
 | **Banco de Dados** | [Neon](https://neon.tech/) (PostgreSQL Serverless) | Conexão segura na porta 443 via WebSocket (gratuita e sem cartão) |
 | **Inteligência Artificial** | [Google AI Studio](https://aistudio.google.com/) | Gemini API free tier (`gemini-2.5-flash`) com fallback empático local |
-| **Músicas** | [Jamendo Developers](https://developer.jamendo.com/) | Catálogo gratuito com licença Creative Commons para uso não-comercial |
+| **Músicas** | Deezer Public API + Fallback iTunes + Web Audio API | Sorteio gratuito por cantor (sem API Key) + paisagens sonoras offline |
 
 ---
 

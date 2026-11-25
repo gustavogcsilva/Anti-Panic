@@ -5,7 +5,9 @@ import type {
   ChatMessage,
   ChatMessageType,
   ChatReportData,
+  ChatTokenUsage,
   CuratedTrack,
+  RandomArtistTrackResponse,
   UserPreferences,
 } from '../types';
 
@@ -188,16 +190,32 @@ export const api = {
   getBotTracks: () =>
     request<{ tracks: CuratedTrack[] }>('/bot/tracks', { method: 'GET' }),
 
+  getRandomTrackByArtist: (artist?: string) => {
+    const query = artist?.trim()
+      ? `?artist=${encodeURIComponent(artist.trim())}`
+      : '';
+    return request<RandomArtistTrackResponse>(`/api/music/random${query}`, {
+      method: 'GET',
+    });
+  },
+
   getChatHistory: (options?: { crisis?: boolean }) =>
-    request<{ friendName: string; messages: ChatMessage[] }>(
-      `/api/chat/history${options?.crisis ? '?crisis=true' : ''}`,
-      { method: 'GET' }
-    ),
+    request<{
+      friendName: string;
+      messages: ChatMessage[];
+      tokenUsage?: ChatTokenUsage;
+      tokenWarning?: string | null;
+    }>(`/api/chat/history${options?.crisis ? '?crisis=true' : ''}`, {
+      method: 'GET',
+    }),
 
   clearChatHistory: () =>
-    request<{ friendName: string; message: ChatMessage }>('/api/chat/history', {
-      method: 'DELETE',
-    }),
+    request<{ friendName: string; message?: ChatMessage; cleared?: boolean }>(
+      '/api/chat/history',
+      {
+        method: 'DELETE',
+      }
+    ),
 
   createCrisisWelcome: () =>
     request<{ friendName: string; message: ChatMessage }>('/api/chat/welcome', {
@@ -215,6 +233,9 @@ export const api = {
       friendName: string;
       userMessage: ChatMessage;
       friendMessage: ChatMessage;
+      tokenUsage?: ChatTokenUsage;
+      tokenWarning?: string | null;
+      aiUnavailable?: boolean;
     }>('/api/chat', {
       method: 'POST',
       body: JSON.stringify(payload),
