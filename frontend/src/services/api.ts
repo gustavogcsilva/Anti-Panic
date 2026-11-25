@@ -257,6 +257,14 @@ export const api = {
       body: JSON.stringify({ messages }),
     }),
 
-  getChatReportData: () =>
-    request<{ report: ChatReportData }>('/api/chat/report-data', { method: 'GET' }),
+  getChatReportData: (filter?: { startDate?: string; endDate?: string }) => {
+    const params = new URLSearchParams();
+    if (filter?.startDate) params.set('startDate', filter.startDate);
+    if (filter?.endDate) params.set('endDate', filter.endDate);
+    const qs = params.toString();
+    return request<{ report: ChatReportData }>(
+      `/api/chat/report-data${qs ? `?${qs}` : ''}`,
+      { method: 'GET' }
+    );
+  },
 };

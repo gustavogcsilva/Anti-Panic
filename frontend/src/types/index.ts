@@ -123,6 +123,7 @@ export interface PracticalCareSuggestions {
 
 export interface ChatReportData {
   generatedAt: string;
+  periodLabel?: string;
   userName: string;
   friendName: string;
   totalMessages: number;

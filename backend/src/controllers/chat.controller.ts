@@ -84,7 +84,15 @@ export class ChatController {
         throw new AppError('Usuário não autenticado.', 401);
       }
 
-      const report = await chatService.getReportData(req.user.id);
+      const startDate =
+        typeof req.query.startDate === 'string' ? req.query.startDate.trim() : undefined;
+      const endDate =
+        typeof req.query.endDate === 'string' ? req.query.endDate.trim() : undefined;
+
+      const report = await chatService.getReportData(req.user.id, {
+        startDate,
+        endDate,
+      });
       res.status(200).json({ report });
     } catch (error) {
       next(error);

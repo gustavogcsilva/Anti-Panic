@@ -170,11 +170,37 @@ export function buildOfflineReportFromMessages(params: {
   userName: string;
   friendName: string;
   messages: ChatMessage[];
+  startDate?: string;
+  endDate?: string;
 }): ChatReportData {
-  const { userName, friendName, messages } = params;
+  const { userName, friendName, startDate, endDate } = params;
+
+  const filteredMessages = params.messages.filter((msg) => {
+    const isoDate = msg.criadoEm.slice(0, 10);
+    if (startDate && isoDate < startDate) return false;
+    if (endDate && isoDate > endDate) return false;
+    return true;
+  });
+
+  const formatIsoBr = (iso: string) => {
+    const [y, m, d] = iso.split('-');
+    return `${d}/${m}/${y}`;
+  };
+
+  let periodLabel = 'Todos os dias registrados';
+  if (startDate && endDate) {
+    periodLabel =
+      startDate === endDate
+        ? `Dia ${formatIsoBr(startDate)}`
+        : `De ${formatIsoBr(startDate)} até ${formatIsoBr(endDate)}`;
+  } else if (startDate) {
+    periodLabel = `A partir de ${formatIsoBr(startDate)}`;
+  } else if (endDate) {
+    periodLabel = `Até ${formatIsoBr(endDate)}`;
+  }
 
   const grouped = new Map<string, ChatMessage[]>();
-  for (const msg of messages) {
+  for (const msg of filteredMessages) {
     const isoDate = msg.criadoEm.slice(0, 10);
     const list = grouped.get(isoDate) ?? [];
     list.push(msg);
@@ -232,12 +258,14 @@ export function buildOfflineReportFromMessages(params: {
 
   return {
     generatedAt: new Date().toISOString(),
+    periodLabel,
     userName,
     friendName,
-    totalMessages: messages.length,
-    totalAudioMessages: messages.filter((m) => m.tipo === 'AUDIO').length,
-    totalCrisisMessages: messages.filter((m) => m.remetente === 'USER' && m.criseRelacionada)
-      .length,
+    totalMessages: filteredMessages.length,
+    totalAudioMessages: filteredMessages.filter((m) => m.tipo === 'AUDIO').length,
+    totalCrisisMessages: filteredMessages.filter(
+      (m) => m.remetente === 'USER' && m.criseRelacionada
+    ).length,
     totalPanicActivations: days.reduce((acc, d) => acc + d.crisisCount, 0),
     topTriggers: [],
     overallConclusion:

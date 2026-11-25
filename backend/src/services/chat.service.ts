@@ -60,6 +60,7 @@ export interface ChatTokenUsage {
 
 export interface ChatReportData {
   generatedAt: string;
+  periodLabel: string;
   userName: string;
   friendName: string;
   totalMessages: number;
@@ -1036,18 +1037,71 @@ export class ChatService {
 
   /**
    * Gera os dados estruturados do Relatório de Conversas para exportação em PDF,
-   * incluindo análise por data, sugestões práticas personalizadas e indicação dos gatilhos identificados.
+   * com suporte a filtro opcional por período (startDate / endDate) ou todos os dias.
    */
-  public async getReportData(userId: string): Promise<ChatReportData> {
+  public async getReportData(
+    userId: string,
+    dateFilter?: { startDate?: string; endDate?: string }
+  ): Promise<ChatReportData> {
     const context = await this.getUserAndFriendContext(userId);
+
+    const datePattern = /^\d{4}-\d{2}-\d{2}$/;
+    const validStart =
+      dateFilter?.startDate && datePattern.test(dateFilter.startDate)
+        ? dateFilter.startDate
+        : undefined;
+    const validEnd =
+      dateFilter?.endDate && datePattern.test(dateFilter.endDate)
+        ? dateFilter.endDate
+        : undefined;
+
+    const gteDate = validStart ? new Date(`${validStart}T00:00:00.000Z`) : undefined;
+    const lteDate = validEnd ? new Date(`${validEnd}T23:59:59.999Z`) : undefined;
+
+    const formatIsoBr = (iso: string) => {
+      const [y, m, d] = iso.split('-');
+      return `${d}/${m}/${y}`;
+    };
+
+    let periodLabel = 'Todos os dias registrados';
+    if (validStart && validEnd) {
+      periodLabel =
+        validStart === validEnd
+          ? `Dia ${formatIsoBr(validStart)}`
+          : `De ${formatIsoBr(validStart)} até ${formatIsoBr(validEnd)}`;
+    } else if (validStart) {
+      periodLabel = `A partir de ${formatIsoBr(validStart)}`;
+    } else if (validEnd) {
+      periodLabel = `Até ${formatIsoBr(validEnd)}`;
+    }
 
     const [messages, panicCount] = await Promise.all([
       this.prisma.chatMessage.findMany({
-        where: { userId },
+        where: {
+          userId,
+          ...(gteDate || lteDate
+            ? {
+                criadoEm: {
+                  ...(gteDate ? { gte: gteDate } : {}),
+                  ...(lteDate ? { lte: lteDate } : {}),
+                },
+              }
+            : {}),
+        },
         orderBy: { criadoEm: 'asc' },
       }),
       this.prisma.panicLog.count({
-        where: { userId },
+        where: {
+          userId,
+          ...(gteDate || lteDate
+            ? {
+                triggeredAt: {
+                  ...(gteDate ? { gte: gteDate } : {}),
+                  ...(lteDate ? { lte: lteDate } : {}),
+                },
+              }
+            : {}),
+        },
       }),
     ]);
 
@@ -1186,6 +1240,7 @@ export class ChatService {
 
     return {
       generatedAt: new Date().toISOString(),
+      periodLabel,
       userName: context.fullName,
       friendName: context.friendName,
       totalMessages: messages.length,
