@@ -318,16 +318,13 @@ export class ChatService {
 
     const dailyLimit = env.DAILY_CHAT_TOKEN_LIMIT;
     const percentUsed = Math.min(100, Math.round((usedToday / dailyLimit) * 100));
-    const isExhausted = usedToday >= dailyLimit;
-    const isNearLimit = !isExhausted && percentUsed >= 80;
+    const isNearLimit = percentUsed >= 80 && percentUsed < 100;
 
-    let tokenWarning: string | null = null;
-    if (isExhausted) {
-      tokenWarning =
-        'Você atingiu o limite diário de tokens da conversa com a IA. Seguimos com orientações práticas de apoio imediato.';
-    } else if (isNearLimit) {
-      tokenWarning = `Aviso: você já utilizou ${percentUsed}% dos seus tokens diários de conversa. Aproveite para concluir os pontos mais importantes de hoje.`;
-    }
+    // Aviso de "tokens expirados/esgotados" só é exibido quando a API do Gemini
+    // realmente retornar erro de cota (429 / RESOURCE_EXHAUSTED), nunca por estimativa local.
+    const tokenWarning = isNearLimit
+      ? `Aviso: você já utilizou cerca de ${percentUsed}% do volume diário estimado de conversa.`
+      : null;
 
     return {
       tokenUsage: {
@@ -335,7 +332,7 @@ export class ChatService {
         dailyLimit,
         percentUsed,
         isNearLimit,
-        isExhausted,
+        isExhausted: false,
       },
       tokenWarning,
     };
@@ -488,10 +485,7 @@ export class ChatService {
     });
     const previousHistoryAsc = previousHistoryDesc.reverse();
 
-    // 2. Verifica cota diária de tokens antes de chamar a IA
-    const preUsage = await this.calculateDailyTokenUsage(userId);
-
-    // 3. Salva a nova mensagem do usuário no PostgreSQL
+    // 2. Salva a nova mensagem do usuário no PostgreSQL
     const userMessage = await this.prisma.chatMessage.create({
       data: {
         userId,
@@ -515,34 +509,25 @@ export class ChatService {
       },
     ];
 
-    let replyText: string;
-    let aiUnavailable = false;
+    // 3. Chama o Gemini diretamente (sem bloqueio artificial); o aviso de tokens expirados
+    // só aparece se a API do Gemini realmente retornar erro de cota (429 / RESOURCE_EXHAUSTED).
+    const replyResult = await this.generateFriendReply({
+      firstName: context.firstName,
+      friendName: context.friendName,
+      emergencyContactName: context.emergencyContactName,
+      generosMusicais: context.generosMusicais,
+      artistasPreferidos: context.artistasPreferidos,
+      userMessageText: effectiveUserText,
+      isAudio: input.tipo === 'AUDIO',
+      hasTranscription: Boolean(
+        rawText && rawText !== '[Mensagem de voz enviada — desabafo em áudio]'
+      ),
+      isCrisis: Boolean(input.criseRelacionada),
+      history: fullChronologicalHistory,
+    });
 
-    if (preUsage.tokenUsage.isExhausted) {
-      aiUnavailable = true;
-      replyText = this.buildUnavailableConciseFallback({
-        firstName: context.firstName,
-        emergencyContactName: context.emergencyContactName,
-        reason: 'quota',
-      });
-    } else {
-      const replyResult = await this.generateFriendReply({
-        firstName: context.firstName,
-        friendName: context.friendName,
-        emergencyContactName: context.emergencyContactName,
-        generosMusicais: context.generosMusicais,
-        artistasPreferidos: context.artistasPreferidos,
-        userMessageText: effectiveUserText,
-        isAudio: input.tipo === 'AUDIO',
-        hasTranscription: Boolean(
-          rawText && rawText !== '[Mensagem de voz enviada — desabafo em áudio]'
-        ),
-        isCrisis: Boolean(input.criseRelacionada),
-        history: fullChronologicalHistory,
-      });
-      replyText = replyResult.text;
-      aiUnavailable = replyResult.aiUnavailable;
-    }
+    const replyText = replyResult.text;
+    const aiUnavailable = replyResult.aiUnavailable;
 
     // 4. Salva a resposta do assistente ('FRIEND' / model) no PostgreSQL antes de devolver ao front-end
     const friendMessage = await this.prisma.chatMessage.create({
@@ -556,13 +541,19 @@ export class ChatService {
     });
 
     const postUsage = await this.calculateDailyTokenUsage(userId);
+    const effectiveTokenWarning = replyResult.quotaExceeded
+      ? 'Os tokens da IA foram esgotados no momento (limite real da API atingido). Seguimos com orientações práticas de apoio imediato.'
+      : postUsage.tokenWarning;
 
     return {
       friendName: context.friendName,
       userMessage,
       friendMessage,
-      tokenUsage: postUsage.tokenUsage,
-      tokenWarning: postUsage.tokenWarning,
+      tokenUsage: {
+        ...postUsage.tokenUsage,
+        isExhausted: replyResult.quotaExceeded,
+      },
+      tokenWarning: effectiveTokenWarning,
       aiUnavailable,
     };
   }
@@ -655,7 +646,7 @@ export class ChatService {
     hasTranscription: boolean;
     isCrisis: boolean;
     history: Array<{ remetente: ChatSender; conteudoTexto: string }>;
-  }): Promise<{ text: string; aiUnavailable: boolean }> {
+  }): Promise<{ text: string; aiUnavailable: boolean; quotaExceeded: boolean }> {
     const {
       firstName,
       friendName,
@@ -750,14 +741,20 @@ export class ChatService {
                 isCrisis,
               }),
               aiUnavailable: false,
+              quotaExceeded: false,
             };
           }
         } else {
+          const errorBody = await response.text().catch(() => '');
+          const isRealQuotaError =
+            response.status === 429 ||
+            /RESOURCE_EXHAUSTED|quota|rate.?limit/i.test(errorBody);
+
           geminiFailedWithQuotaOrOutage = true;
-          failureReason = response.status === 429 ? 'quota' : 'unavailable';
+          failureReason = isRealQuotaError ? 'quota' : 'unavailable';
           console.warn(
             `[ChatService] Gemini API respondeu status ${response.status}${
-              response.status === 429 ? ' (Limite de cota atingido)' : ''
+              isRealQuotaError ? ' (Cota/tokens realmente esgotados)' : ''
             }. Ativando fallback acolhedor local.`
           );
         }
@@ -771,9 +768,8 @@ export class ChatService {
       }
     }
 
-    // Se a API do Gemini falhou por cota (429) ou indisponibilidade (503/erro), entrega
-    // orientações concisas e práticas (respiração 4-4-6, aterramento 3-2 e CVV 188 / apoio humano)
-    // combinadas com as sugestões práticas quando o usuário estiver pedindo sugestões
+    // Se a API do Gemini falhou de fato por cota (429 / RESOURCE_EXHAUSTED) ou indisponibilidade,
+    // entrega orientações concisas e práticas (respiração 4-4-6, aterramento 3-2 e CVV 188)
     if (geminiFailedWithQuotaOrOutage) {
       const conciseCrisisFallback = this.buildUnavailableConciseFallback({
         firstName,
@@ -789,6 +785,7 @@ export class ChatService {
           isCrisis,
         }),
         aiUnavailable: true,
+        quotaExceeded: failureReason === 'quota',
       };
     }
 
@@ -813,6 +810,7 @@ export class ChatService {
         isCrisis,
       }),
       aiUnavailable: false,
+      quotaExceeded: false,
     };
   }
 
